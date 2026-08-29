@@ -75,6 +75,31 @@ class KionPhonemizer:
         return "".join([ID_TO_SYMBOL.get(idx, "") for idx in sequence])
 
 
+# ─── Module-Level Convenience Functions ─────────────────────────────────────────
+_default_phonemizer: Optional[KionPhonemizer] = None
+
+
+def get_phonemizer() -> KionPhonemizer:
+    """Returns a singleton instance of KionPhonemizer."""
+    global _default_phonemizer
+    if _default_phonemizer is None:
+        _default_phonemizer = KionPhonemizer()
+    return _default_phonemizer
+
+
+def phonemize_text(text: str) -> List[int]:
+    """
+    Convert input text directly to a list of integer phoneme token IDs.
+    Used across KionStyleTTS2 training manifests, datasets, and inference.
+    """
+    return get_phonemizer().text_to_sequence(text)
+
+
+def phonemize_to_ipa(text: str) -> str:
+    """Convert raw text to IPA phoneme string."""
+    return get_phonemizer().phonemize_text(text)
+
+
 if __name__ == "__main__":
     ph = KionPhonemizer()
     sample = "Hello, I am Kion! How can I help you today?"
@@ -85,3 +110,5 @@ if __name__ == "__main__":
     print(f"Sequence IDs ({len(seq)}): {seq}")
     print(f"Reconstructed: {ph.sequence_to_text(seq)}")
     print(f"Vocabulary Size: {VOCAB_SIZE}")
+    print(f"Module phonemize_text test: {phonemize_text(sample)}")
+

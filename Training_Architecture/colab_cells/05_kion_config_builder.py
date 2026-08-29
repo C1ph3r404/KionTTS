@@ -11,13 +11,23 @@ Run BEFORE: Cell 06 (Stage 1 training)
 import os
 import yaml
 
-# ─── Paths ──────────────────────────────────────────────────────────────────
-REPO_ROOT       = "/content/KionTTS"            # cloned repo root on Colab
+def _get_repo_root() -> str:
+    rel_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
+    if os.path.exists(os.path.join(rel_path, "model")):
+        return rel_path
+    for p in ["/content/KionTTS", "/content/Kiontts", "/content/kiontts"]:
+        if os.path.exists(p):
+            return p
+    return "/content/KionTTS"
+
+
+REPO_ROOT       = _get_repo_root()
 STYLETTS2_ROOT  = f"{REPO_ROOT}/StyleTTS2"
 DRIVE_CKPT_DIR  = "/content/drive/MyDrive/KionTTS_Checkpoints"
 DATASET_ROOT    = "/content/dataset/wavs"
 LOG_DIR         = f"{DRIVE_CKPT_DIR}/logs"
 STAGE1_PATH     = f"{DRIVE_CKPT_DIR}/kion_stage1.pth"
+
 
 # ─── Detect GPU VRAM and set batch size ─────────────────────────────────────
 def auto_batch_size():

@@ -37,7 +37,17 @@ from tqdm import tqdm
 warnings.simplefilter("ignore")
 
 # ─── Colab Paths ─────────────────────────────────────────────────────────────
-REPO_ROOT      = "/content/KionTTS"
+def _get_repo_root() -> str:
+    rel_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
+    if os.path.exists(os.path.join(rel_path, "model")):
+        return rel_path
+    for p in ["/content/KionTTS", "/content/Kiontts", "/content/kiontts"]:
+        if os.path.exists(p):
+            return p
+    return "/content/KionTTS"
+
+
+REPO_ROOT      = _get_repo_root()
 STYLETTS2_ROOT = f"{REPO_ROOT}/StyleTTS2"
 DRIVE_CKPT_DIR = "/content/drive/MyDrive/KionTTS_Checkpoints"
 CONFIG_PATH    = f"{STYLETTS2_ROOT}/Configs/kion_config.yml"
@@ -47,6 +57,7 @@ STAGE1_FINAL   = os.path.join(DRIVE_CKPT_DIR, "kion_stage1_final.pth")
 for p in [REPO_ROOT, STYLETTS2_ROOT]:
     if p not in sys.path:
         sys.path.insert(0, p)
+
 
 # ─── Imports ──────────────────────────────────────────────────────────────────
 import yaml

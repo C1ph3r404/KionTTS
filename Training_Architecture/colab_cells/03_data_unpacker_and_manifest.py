@@ -118,6 +118,21 @@ def find_dataset_zip(filename: str) -> str:
     return os.path.join("/content/data", filename)
 
 
+def _get_repo_root() -> str:
+    rel_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
+    if os.path.exists(os.path.join(rel_path, "model")):
+        return rel_path
+    for p in ["/content/KionTTS", "/content/Kiontts", "/content/kiontts"]:
+        if os.path.exists(p):
+            return p
+    return "/content/KionTTS"
+
+
+REPO_ROOT = _get_repo_root()
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
+
+
 def generate_styletts2_lists(
     manifest_path: str,
     output_txt_path: str,
@@ -134,13 +149,6 @@ def generate_styletts2_lists(
     Returns:
         Number of entries written.
     """
-    import sys
-
-    # Ensure repo paths are available for phonemizer
-    REPO_ROOT = "/content/KionTTS"
-    if REPO_ROOT not in sys.path:
-        sys.path.insert(0, REPO_ROOT)
-
     from model.data.phonemizer_util import phonemize_text  # noqa: E402
 
     with open(manifest_path, "r", encoding="utf-8") as f:
@@ -175,12 +183,15 @@ def run_extraction_pipeline(
     val_zip: Optional[str] = None,
     wav_dir: str = "/content/dataset/wavs",
     manifest_dir: str = "/content/dataset",
-    styletts2_data_dir: str = "/content/KionTTS/StyleTTS2/Data",
+    styletts2_data_dir: Optional[str] = None,
 ):
     if train_zip is None or not os.path.exists(train_zip):
         train_zip = find_dataset_zip("KionTTS_Dataset_train.zip")
     if val_zip is None or not os.path.exists(val_zip):
         val_zip = find_dataset_zip("KionTTS_Dataset_val.zip")
+
+    if styletts2_data_dir is None:
+        styletts2_data_dir = os.path.join(REPO_ROOT, "StyleTTS2", "Data")
 
     train_manifest = os.path.join(manifest_dir, "train_manifest.json")
     val_manifest   = os.path.join(manifest_dir, "val_manifest.json")
@@ -207,3 +218,4 @@ def run_extraction_pipeline(
 
 if __name__ == "__main__":
     run_extraction_pipeline()
+
