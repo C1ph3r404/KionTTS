@@ -57,6 +57,15 @@ for p in [REPO_ROOT, STYLETTS2_ROOT]:
 
 
 
+# ─── Ensure Dependencies (self-healing for active Colab runtimes) ────────────
+for _pkg, _mod in [("munch", "munch"), ("einops-exts", "einops_exts"), ("einops", "einops"), ("pydub", "pydub")]:
+    try:
+        __import__(_mod)
+    except ImportError:
+        import subprocess
+        print(f"[*] Installing missing package: {_pkg}...")
+        subprocess.run([sys.executable, "-m", "pip", "install", "-q", _pkg], check=False)
+
 # ─── Imports (after path setup) ───────────────────────────────────────────────
 import yaml
 from munch import Munch

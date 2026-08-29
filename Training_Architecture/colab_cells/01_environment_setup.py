@@ -47,7 +47,11 @@ def install_dependencies():
         "transformers>=4.36.0",
         "accelerate>=0.26.0",
         "einops",                     # tensor rearrangement (used in diffusion)
+        "einops-exts",                # rearrange_many (required by StyleTTS2 diffusion)
         "munch",                      # dot-access dicts (required by StyleTTS2)
+        "pydub",                      # audio slicing/processing
+        "nltk",                       # text tokenize/preprocess
+        "pandas",                     # manifest/meldataset handling
         # ── Alignment ─────────────────────────────────────────────────────
         "cython",                     # required to build monotonic_align
         # ── Misc ──────────────────────────────────────────────────────────
