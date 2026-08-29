@@ -1,7 +1,7 @@
 """
 Colab Cell 06: Full-Scale KionTTS Model Training
-Integrates automatic Google Drive checkpoint recovery, mixed-precision training,
-periodic validation evaluation, and best-model tracking.
+Integrates automatic Google Drive checkpoint recovery, FP16 mixed-precision training,
+cuDNN benchmark acceleration, periodic validation evaluation, and best-model tracking.
 """
 
 import os
@@ -26,14 +26,14 @@ def evaluate(model, val_loader, criterion, device):
     total_mel_loss = 0.0
     with torch.no_grad():
         for batch in val_loader:
-            tokens = batch["tokens"].to(device)
-            style_weights = batch["style_weights"].to(device)
-            target_mel = batch["mel"].to(device)
-            target_dur = batch["durations"].to(device)
-            target_log_dur = batch["target_log_durations"].to(device)
-            target_pitch = batch["pitch"].to(device)
-            target_energy = batch["energy"].to(device)
-            text_mask = batch["text_mask"].to(device)
+            tokens = batch["tokens"].to(device, non_blocking=True)
+            style_weights = batch["style_weights"].to(device, non_blocking=True)
+            target_mel = batch["mel"].to(device, non_blocking=True)
+            target_dur = batch["durations"].to(device, non_blocking=True)
+            target_log_dur = batch["target_log_durations"].to(device, non_blocking=True)
+            target_pitch = batch["pitch"].to(device, non_blocking=True)
+            target_energy = batch["energy"].to(device, non_blocking=True)
+            text_mask = batch["text_mask"].to(device, non_blocking=True)
 
             predictions = model(
                 text_tokens=tokens,
@@ -65,7 +65,7 @@ def run_full_training(
     val_manifest: str = "/content/dataset/val_preprocessed.json",
     checkpoint_dir: str = "/content/drive/MyDrive/KionTTS_Checkpoints",
     epochs: int = 100,
-    batch_size: int = 24,
+    batch_size: int = 32,
     lr: float = 2e-4,
     save_step_interval: int = 500,
     eval_step_interval: int = 250,
@@ -77,6 +77,8 @@ def run_full_training(
     print("=" * 65)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if torch.cuda.is_available():
+        torch.backends.cudnn.benchmark = True
     print(f"Device: {device}")
 
     # 1. Initialize Checkpoint Manager
@@ -90,7 +92,7 @@ def run_full_training(
         shuffle=True,
         collate_fn=collate_fn_kion,
         num_workers=2 if os.name != "nt" else 0,
-        pin_memory=True,
+        pin_memory=torch.cuda.is_available(),
     )
 
     val_dataset = KionDataset(val_manifest)
@@ -100,7 +102,7 @@ def run_full_training(
         shuffle=False,
         collate_fn=collate_fn_kion,
         num_workers=2 if os.name != "nt" else 0,
-        pin_memory=True,
+        pin_memory=torch.cuda.is_available(),
     )
 
     # 3. Model, Loss, Optimizer, Scaler
@@ -129,14 +131,14 @@ def run_full_training(
 
         for batch in pbar:
             global_step += 1
-            tokens = batch["tokens"].to(device)
-            style_weights = batch["style_weights"].to(device)
-            target_mel = batch["mel"].to(device)
-            target_dur = batch["durations"].to(device)
-            target_log_dur = batch["target_log_durations"].to(device)
-            target_pitch = batch["pitch"].to(device)
-            target_energy = batch["energy"].to(device)
-            text_mask = batch["text_mask"].to(device)
+            tokens = batch["tokens"].to(device, non_blocking=True)
+            style_weights = batch["style_weights"].to(device, non_blocking=True)
+            target_mel = batch["mel"].to(device, non_blocking=True)
+            target_dur = batch["durations"].to(device, non_blocking=True)
+            target_log_dur = batch["target_log_durations"].to(device, non_blocking=True)
+            target_pitch = batch["pitch"].to(device, non_blocking=True)
+            target_energy = batch["energy"].to(device, non_blocking=True)
+            text_mask = batch["text_mask"].to(device, non_blocking=True)
 
             optimizer.zero_grad()
 

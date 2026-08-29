@@ -1,7 +1,7 @@
 """
-Colab Cell 05: Prototype Model Training (~1k Samples)
-Runs a fast validation experiment on 1,000 samples across 6-8 dominant styles
-to verify loss convergence, alignment stability, and tag responsiveness.
+Colab Cell 05: Fast Prototype Model Training (~1k Samples)
+Runs an optimized validation experiment on 1,000 samples across dominant styles
+using FP16 mixed precision and CUDA acceleration.
 """
 
 import os
@@ -9,6 +9,7 @@ import sys
 import json
 import torch
 import torch.optim as optim
+from torch.cuda.amp import GradScaler, autocast
 from torch.utils.data import DataLoader, Subset
 from tqdm import tqdm
 
@@ -22,17 +23,19 @@ def run_prototype_training(
     preprocessed_manifest: str = "/content/dataset/train_preprocessed.json",
     checkpoint_dir: str = "/content/drive/MyDrive/KionTTS_Checkpoints",
     epochs: int = 20,
-    batch_size: int = 16,
-    lr: float = 1e-4,
+    batch_size: int = 32,
+    lr: float = 2e-4,
     subset_size: int = 1000,
 ):
     print("=" * 60)
-    print("Starting KionTTS Fast Prototype Training...")
+    print("Starting KionTTS Accelerated Prototype Training...")
     print(f"Target Subset Size: {subset_size} samples")
     print(f"Epochs: {epochs} | Batch Size: {batch_size} | Learning Rate: {lr}")
     print("=" * 60)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if torch.cuda.is_available():
+        torch.backends.cudnn.benchmark = True
     print(f"Using compute device: {device}")
 
     # 1. Dataset & Subset DataLoader
@@ -47,14 +50,15 @@ def run_prototype_training(
         shuffle=True,
         collate_fn=collate_fn_kion,
         num_workers=2 if os.name != "nt" else 0,
-        pin_memory=True,
+        pin_memory=torch.cuda.is_available(),
     )
 
-    # 2. Model, Loss, Optimizer
+    # 2. Model, Loss, Optimizer, Mixed Precision Scaler
     model = KionTTSModel().to(device)
     criterion = KionLoss().to(device)
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-2)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
+    scaler = GradScaler(enabled=torch.cuda.is_available())
 
     os.makedirs(checkpoint_dir, exist_ok=True)
     prototype_save_path = os.path.join(checkpoint_dir, "prototype_kion.pt")
@@ -68,39 +72,42 @@ def run_prototype_training(
 
         pbar = tqdm(dataloader, desc=f"Epoch {epoch}/{epochs}")
         for batch in pbar:
-            tokens = batch["tokens"].to(device)
-            style_weights = batch["style_weights"].to(device)
-            target_mel = batch["mel"].to(device)
-            target_dur = batch["durations"].to(device)
-            target_log_dur = batch["target_log_durations"].to(device)
-            target_pitch = batch["pitch"].to(device)
-            target_energy = batch["energy"].to(device)
-            text_mask = batch["text_mask"].to(device)
+            tokens = batch["tokens"].to(device, non_blocking=True)
+            style_weights = batch["style_weights"].to(device, non_blocking=True)
+            target_mel = batch["mel"].to(device, non_blocking=True)
+            target_dur = batch["durations"].to(device, non_blocking=True)
+            target_log_dur = batch["target_log_durations"].to(device, non_blocking=True)
+            target_pitch = batch["pitch"].to(device, non_blocking=True)
+            target_energy = batch["energy"].to(device, non_blocking=True)
+            text_mask = batch["text_mask"].to(device, non_blocking=True)
 
             optimizer.zero_grad()
 
-            predictions = model(
-                text_tokens=tokens,
-                style_weights=style_weights,
-                target_durations=target_dur,
-                target_pitch=target_pitch,
-                target_energy=target_energy,
-                text_mask=text_mask,
-            )
+            with autocast(enabled=torch.cuda.is_available()):
+                predictions = model(
+                    text_tokens=tokens,
+                    style_weights=style_weights,
+                    target_durations=target_dur,
+                    target_pitch=target_pitch,
+                    target_energy=target_energy,
+                    text_mask=text_mask,
+                )
 
-            targets = {
-                "target_mel": target_mel,
-                "target_log_durations": target_log_dur,
-                "target_pitch": target_pitch,
-                "target_energy": target_energy,
-            }
+                targets = {
+                    "target_mel": target_mel,
+                    "target_log_durations": target_log_dur,
+                    "target_pitch": target_pitch,
+                    "target_energy": target_energy,
+                }
 
-            loss_dict = criterion(predictions, targets)
-            loss = loss_dict["total_loss"]
+                loss_dict = criterion(predictions, targets)
+                loss = loss_dict["total_loss"]
 
-            loss.backward()
+            scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            optimizer.step()
+            scaler.step(optimizer)
+            scaler.update()
 
             total_epoch_loss += loss.item()
             total_mel_loss += loss_dict["mel_loss"].item()
