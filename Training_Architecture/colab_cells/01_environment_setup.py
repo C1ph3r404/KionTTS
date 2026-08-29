@@ -55,25 +55,37 @@ def install_dependencies():
 
 def setup_drive_and_directories():
     print("\nSetting up Google Drive & working directories...")
-    try:
-        from google.colab import drive
+    drive_mounted = os.path.exists("/content/drive/MyDrive")
 
-        drive.mount("/content/drive")
-        print("Google Drive mounted successfully at /content/drive")
-    except ImportError:
-        print("Not running in Google Colab environment (skipping drive.mount).")
+    if not drive_mounted:
+        try:
+            from google.colab import drive
+            drive.mount("/content/drive")
+            drive_mounted = os.path.exists("/content/drive/MyDrive")
+            if drive_mounted:
+                print("Google Drive mounted successfully at /content/drive")
+        except Exception:
+            print("[*] Note: To mount Google Drive in Colab, run in an interactive cell:")
+            print("    from google.colab import drive; drive.mount('/content/drive')")
 
     # Define standard directories
     dirs = [
-        "/content/drive/MyDrive/KionTTS_Checkpoints",
-        "/content/drive/MyDrive/KionTTS_Checkpoints/eval_samples",
         "/content/dataset",
         "/content/dataset/wavs",
         "/content/preprocessed_data",
     ]
+    if os.path.exists("/content/drive"):
+        dirs.extend([
+            "/content/drive/MyDrive/KionTTS_Checkpoints",
+            "/content/drive/MyDrive/KionTTS_Checkpoints/eval_samples",
+        ])
+
     for d in dirs:
-        os.makedirs(d, exist_ok=True)
-        print(f"Directory ready: {d}")
+        try:
+            os.makedirs(d, exist_ok=True)
+            print(f"Directory ready: {d}")
+        except Exception as e:
+            print(f"Notice: Directory {d} could not be created yet: {e}")
 
 
 if __name__ == "__main__":
