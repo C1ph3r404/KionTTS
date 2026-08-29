@@ -37,6 +37,8 @@ eval_samples/
 *.bin
 *.onnx
 *.safetensors
+!StyleTTS2/Utils/**/*.pth
+!StyleTTS2/Utils/**/*.t7
 checkpoints/
 preprocessed_data/
 dataset/

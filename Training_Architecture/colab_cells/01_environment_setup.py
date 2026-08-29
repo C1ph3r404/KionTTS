@@ -111,8 +111,54 @@ def setup_drive_and_directories():
             print(f"Notice: Directory {d} could not be created yet: {e}")
 
 
+def download_pretrained_utilities():
+    """Ensure StyleTTS2 pretrained utility models (ASR, JDC, PL-BERT) are present."""
+    print("\nVerifying pretrained utility models (ASR, JDC, PLBERT)...")
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
+    styletts2_root = os.path.join(repo_root, "StyleTTS2")
+    if not os.path.exists(styletts2_root):
+        for _p in ["/content/KionTTS/StyleTTS2", "/content/Kiontts/StyleTTS2", "/content/kiontts/StyleTTS2"]:
+            if os.path.exists(_p):
+                styletts2_root = _p
+                break
+
+    models = [
+        (
+            os.path.join(styletts2_root, "Utils/ASR/epoch_00080.pth"),
+            "https://github.com/yl4579/StyleTTS2/raw/main/Utils/ASR/epoch_00080.pth",
+            "ASR text aligner (epoch_00080.pth)",
+        ),
+        (
+            os.path.join(styletts2_root, "Utils/JDC/bst.t7"),
+            "https://github.com/yl4579/StyleTTS2/raw/main/Utils/JDC/bst.t7",
+            "F0 pitch extractor (bst.t7)",
+        ),
+        (
+            os.path.join(styletts2_root, "Utils/PLBERT/step_1000000.t7"),
+            "https://github.com/yl4579/StyleTTS2/raw/main/Utils/PLBERT/step_1000000.t7",
+            "PL-BERT (step_1000000.t7)",
+        ),
+    ]
+
+    import urllib.request
+    for dest, url, desc in models:
+        if not os.path.exists(dest):
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            print(f"[*] Downloading {desc}...")
+            try:
+                urllib.request.urlretrieve(url, dest)
+                print(f"[+] Successfully downloaded: {dest}")
+            except Exception as e:
+                print(f"[!] Direct download failed ({e}), using curl fallback...")
+                subprocess.run(["curl", "-L", "-o", dest, url], check=True)
+                print(f"[+] Successfully downloaded via curl: {dest}")
+        else:
+            print(f"[+] Found {desc} at {dest}")
+
+
 if __name__ == "__main__":
     check_gpu()
     install_dependencies()
     setup_drive_and_directories()
+    download_pretrained_utilities()
     print("\n[Cell 01 Complete] Environment is ready for KionTTS.")

@@ -195,6 +195,49 @@ def _resolve_config_paths(cfg, base_dir=STYLETTS2_ROOT):
     return cfg
 
 
+def _download_file(url: str, dest_path: str, desc: str):
+    """Download a file with progress reporting and curl fallback."""
+    os.makedirs(os.path.dirname(os.path.abspath(dest_path)), exist_ok=True)
+    print(f"[*] Downloading {desc} to {dest_path}...")
+    try:
+        import urllib.request
+        def _reporthook(blocknum, blocksize, totalsize):
+            if totalsize > 0:
+                percent = min(100, blocknum * blocksize * 100 / totalsize)
+                sys.stdout.write(f"\r    Progress: {percent:.1f}% ({blocknum*blocksize/(1024*1024):.1f}/{totalsize/(1024*1024):.1f} MB)")
+                sys.stdout.flush()
+        urllib.request.urlretrieve(url, dest_path, reporthook=_reporthook)
+        print(f"\n[+] Downloaded: {dest_path} ({os.path.getsize(dest_path)/(1024*1024):.1f} MB)")
+    except Exception as e:
+        print(f"\n[!] Python download failed ({e}), falling back to curl...")
+        import subprocess
+        subprocess.run(["curl", "-L", "-o", dest_path, url], check=True)
+        print(f"[+] Downloaded via curl: {dest_path}")
+
+
+def _ensure_pretrained_assets(cfg):
+    """Auto-download required pretrained utility weights if missing on disk."""
+    # 1. ASR model checkpoint (epoch_00080.pth)
+    asr_path = cfg.get("ASR_path")
+    if asr_path and not os.path.exists(asr_path):
+        url = "https://github.com/yl4579/StyleTTS2/raw/main/Utils/ASR/epoch_00080.pth"
+        _download_file(url, asr_path, "Pretrained ASR aligner (epoch_00080.pth)")
+
+    # 2. F0 model checkpoint (bst.t7)
+    f0_path = cfg.get("F0_path")
+    if f0_path and not os.path.exists(f0_path):
+        url = "https://github.com/yl4579/StyleTTS2/raw/main/Utils/JDC/bst.t7"
+        _download_file(url, f0_path, "Pretrained F0 pitch extractor (bst.t7)")
+
+    # 3. PL-BERT checkpoint (step_1000000.t7)
+    plbert_dir = cfg.get("PLBERT_dir")
+    if plbert_dir:
+        plbert_ckpt = os.path.join(plbert_dir, "step_1000000.t7")
+        if not os.path.exists(plbert_ckpt):
+            url = "https://github.com/yl4579/StyleTTS2/raw/main/Utils/PLBERT/step_1000000.t7"
+            _download_file(url, plbert_ckpt, "Pretrained PL-BERT (step_1000000.t7)")
+
+
 # ─── Main Training Function ───────────────────────────────────────────────────
 def run_stage2_training(config_path: str = CONFIG_PATH):
     print("=" * 65)
@@ -203,6 +246,7 @@ def run_stage2_training(config_path: str = CONFIG_PATH):
 
     config      = yaml.safe_load(open(config_path))
     config      = _resolve_config_paths(config)
+    _ensure_pretrained_assets(config)
     log_dir     = config["log_dir"]
     os.makedirs(log_dir, exist_ok=True)
     loss_params = Munch(config["loss_params"])

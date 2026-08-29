@@ -83,11 +83,41 @@ def _resolve_config_paths(cfg, base_dir=STYLETTS2_ROOT):
     return cfg
 
 
+def _download_file(url: str, dest_path: str, desc: str):
+    """Download a file with progress reporting and curl fallback."""
+    os.makedirs(os.path.dirname(os.path.abspath(dest_path)), exist_ok=True)
+    print(f"[*] Downloading {desc} to {dest_path}...")
+    try:
+        import urllib.request
+        urllib.request.urlretrieve(url, dest_path)
+        print(f"[+] Downloaded: {dest_path}")
+    except Exception as e:
+        import subprocess
+        subprocess.run(["curl", "-L", "-o", dest_path, url], check=True)
+        print(f"[+] Downloaded via curl: {dest_path}")
+
+
+def _ensure_pretrained_assets(cfg):
+    """Auto-download required pretrained utility weights if missing on disk."""
+    asr_path = cfg.get("ASR_path")
+    if asr_path and not os.path.exists(asr_path):
+        _download_file("https://github.com/yl4579/StyleTTS2/raw/main/Utils/ASR/epoch_00080.pth", asr_path, "ASR aligner")
+    f0_path = cfg.get("F0_path")
+    if f0_path and not os.path.exists(f0_path):
+        _download_file("https://github.com/yl4579/StyleTTS2/raw/main/Utils/JDC/bst.t7", f0_path, "F0 pitch model")
+    plbert_dir = cfg.get("PLBERT_dir")
+    if plbert_dir:
+        plbert_ckpt = os.path.join(plbert_dir, "step_1000000.t7")
+        if not os.path.exists(plbert_ckpt):
+            _download_file("https://github.com/yl4579/StyleTTS2/raw/main/Utils/PLBERT/step_1000000.t7", plbert_ckpt, "PL-BERT")
+
+
 # ─── Load Model ───────────────────────────────────────────────────────────────
 def load_kion_model(config_path: str, checkpoint_path: str, device: torch.device):
     """Load KionStyleTTS2 from a Stage 2 checkpoint."""
     config = yaml.safe_load(open(config_path))
     config = _resolve_config_paths(config)
+    _ensure_pretrained_assets(config)
     model_params = recursive_munch(config["model_params"])
 
     text_aligner    = load_ASR_models(config["ASR_path"], config["ASR_config"]).to(device)
