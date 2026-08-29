@@ -118,11 +118,64 @@ def find_dataset_zip(filename: str) -> str:
     return os.path.join("/content/data", filename)
 
 
+def generate_styletts2_lists(
+    manifest_path: str,
+    output_txt_path: str,
+    phonemizer_backend: str = "espeak",
+) -> int:
+    """
+    Converts a Kion JSON manifest into the StyleTTS2 train_list.txt format:
+
+        /path/to/audio.wav|phoneme_sequence
+
+    This is the format StyleTTS2's meldataset.py expects.
+    Phonemization is performed here so we avoid re-doing it at runtime.
+
+    Returns:
+        Number of entries written.
+    """
+    import sys
+
+    # Ensure repo paths are available for phonemizer
+    REPO_ROOT = "/content/KionTTS"
+    if REPO_ROOT not in sys.path:
+        sys.path.insert(0, REPO_ROOT)
+
+    from model.data.phonemizer_util import phonemize_text  # noqa: E402
+
+    with open(manifest_path, "r", encoding="utf-8") as f:
+        records = json.load(f)
+
+    os.makedirs(os.path.dirname(output_txt_path), exist_ok=True)
+    written = 0
+
+    with open(output_txt_path, "w", encoding="utf-8") as fout:
+        for rec in tqdm(records, desc=f"Generating {os.path.basename(output_txt_path)}"):
+            wav_path   = rec["wav_path"]
+            clean_text = rec["clean_text"]
+
+            if not os.path.exists(wav_path):
+                continue
+
+            try:
+                phoneme_ids = phonemize_text(clean_text)
+                # StyleTTS2 expects space-separated integer IDs as the second column
+                phoneme_str = " ".join(str(p) for p in phoneme_ids)
+                fout.write(f"{wav_path}|{phoneme_str}\n")
+                written += 1
+            except Exception as e:
+                print(f"  [WARN] Skipping {rec.get('id', '?')}: {e}")
+
+    print(f"[+] StyleTTS2 list written: {written} entries → {output_txt_path}")
+    return written
+
+
 def run_extraction_pipeline(
     train_zip: Optional[str] = None,
     val_zip: Optional[str] = None,
     wav_dir: str = "/content/dataset/wavs",
     manifest_dir: str = "/content/dataset",
+    styletts2_data_dir: str = "/content/KionTTS/StyleTTS2/Data",
 ):
     if train_zip is None or not os.path.exists(train_zip):
         train_zip = find_dataset_zip("KionTTS_Dataset_train.zip")
@@ -130,11 +183,26 @@ def run_extraction_pipeline(
         val_zip = find_dataset_zip("KionTTS_Dataset_val.zip")
 
     train_manifest = os.path.join(manifest_dir, "train_manifest.json")
-    val_manifest = os.path.join(manifest_dir, "val_manifest.json")
+    val_manifest   = os.path.join(manifest_dir, "val_manifest.json")
 
-    unpack_and_generate_manifest(train_zip, wav_dir, train_manifest, split_name="train")
-    unpack_and_generate_manifest(val_zip, wav_dir, val_manifest, split_name="val")
-    print("\n[Cell 03 Complete] Dataset unpacking & manifest generation completed.")
+    # Step 1: Unpack zips → JSON manifests
+    train_records = unpack_and_generate_manifest(train_zip, wav_dir, train_manifest, split_name="train")
+    val_records   = unpack_and_generate_manifest(val_zip,   wav_dir, val_manifest,   split_name="val")
+
+    # Step 2: Generate StyleTTS2-format .txt lists
+    os.makedirs(styletts2_data_dir, exist_ok=True)
+    train_txt = os.path.join(styletts2_data_dir, "kion_train_list.txt")
+    val_txt   = os.path.join(styletts2_data_dir, "kion_val_list.txt")
+
+    n_train = generate_styletts2_lists(train_manifest, train_txt)
+    n_val   = generate_styletts2_lists(val_manifest,   val_txt)
+
+    print("\n" + "=" * 60)
+    print(f"  Train samples : {n_train}")
+    print(f"  Val samples   : {n_val}")
+    print(f"  StyleTTS2 lists → {styletts2_data_dir}")
+    print("=" * 60)
+    print("\n[Cell 03 Complete] Dataset ready. Proceed to Cell 04 for feature pre-computation.")
 
 
 if __name__ == "__main__":
