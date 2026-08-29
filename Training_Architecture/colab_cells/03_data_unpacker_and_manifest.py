@@ -169,7 +169,7 @@ def generate_styletts2_lists(
                 phoneme_ids = phonemize_text(clean_text)
                 # StyleTTS2 expects space-separated integer IDs as the second column
                 phoneme_str = " ".join(str(p) for p in phoneme_ids)
-                fout.write(f"{wav_path}|{phoneme_str}\n")
+                fout.write(f"{wav_path}|{phoneme_str}|0\n")
                 written += 1
             except Exception as e:
                 print(f"  [WARN] Skipping {rec.get('id', '?')}: {e}")

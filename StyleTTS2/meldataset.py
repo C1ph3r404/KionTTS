@@ -85,6 +85,8 @@ class FilePathDataset(torch.utils.data.Dataset):
         self.sr = sr
 
         self.df = pd.DataFrame(self.data_list)
+        if 2 in self.df.columns:
+            self.df[2] = self.df[2].astype(str)
 
         self.to_melspec = torchaudio.transforms.MelSpectrogram(**MEL_PARAMS)
 
@@ -116,7 +118,10 @@ class FilePathDataset(torch.utils.data.Dataset):
         acoustic_feature = acoustic_feature[:, :(length_feature - length_feature % 2)]
         
         # get reference sample
-        ref_data = (self.df[self.df[2] == str(speaker_id)]).sample(n=1).iloc[0].tolist()
+        matched_df = self.df[self.df[2].astype(str) == str(speaker_id)]
+        if len(matched_df) == 0:
+            matched_df = self.df
+        ref_data = matched_df.sample(n=1).iloc[0].tolist()
         ref_mel_tensor, ref_label = self._load_data(ref_data[:3])
         
         # get OOD text
