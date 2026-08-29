@@ -37,11 +37,16 @@ class TextCleaner:
         self.word_index_dictionary = dicts
     def __call__(self, text):
         indexes = []
+        # Support space-separated precomputed token IDs (e.g. "85 65 17 51...")
+        parts = text.strip().split()
+        if parts and all(p.isdigit() for p in parts):
+            return [int(p) for p in parts]
+
         for char in text:
             try:
                 indexes.append(self.word_index_dictionary[char])
             except KeyError:
-                print(text)
+                pass
         return indexes
 
 np.random.seed(1)
