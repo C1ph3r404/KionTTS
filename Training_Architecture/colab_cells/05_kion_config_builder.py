@@ -34,14 +34,14 @@ def auto_batch_size():
     try:
         import torch
         if not torch.cuda.is_available():
-            return 4
+            return 2
         vram = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)
-        if vram >= 38:   return 24   # A100 40GB
-        elif vram >= 14: return 8    # T4 / V100
-        elif vram >= 10: return 6
-        else:            return 4
+        if vram >= 38:   return 16   # A100 40GB
+        elif vram >= 22: return 8    # RTX 3090 / 4090 / A10G (24GB)
+        elif vram >= 14: return 2    # T4 / V100 (15GB/16GB) — StyleTTS2 vocoder requires bs=2 on T4
+        else:            return 2
     except Exception:
-        return 4
+        return 2
 
 
 def build_kion_config(
@@ -79,7 +79,7 @@ def build_kion_config(
         "epochs_1st":            epochs_1st,
         "epochs_2nd":            epochs_2nd,
         "batch_size":            bs,
-        "max_len":               300,           # max mel frames per clip
+        "max_len":               200,           # max mel frames per clip (200 is optimal for T4 memory)
 
         # ── Checkpoint resumption ─────────────────────────────────────────
         "pretrained_model":      "",

@@ -22,6 +22,10 @@ Run BEFORE: Cell 08 (inference test)
 
 import os
 import sys
+
+# Prevent CUDA memory fragmentation on 16GB GPUs (like Colab T4)
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+
 import time
 import random
 import shutil
@@ -265,12 +269,23 @@ def run_stage2_training(config_path: str = CONFIG_PATH):
     diff_epoch  = loss_params.diff_epoch
     joint_epoch = loss_params.joint_epoch
     epochs      = config.get("epochs_2nd", 60)
-    batch_size  = config.get("batch_size", 8)
-    max_len     = config.get("max_len", 300)
+    batch_size  = config.get("batch_size", 2)
+    max_len     = config.get("max_len", 200)
     sr          = config["preprocess_params"].get("sr", 24000)
     slmadv_cfg  = Munch(config.get("slmadv_params", {}))
     device      = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     use_fp16    = torch.cuda.is_available()
+
+    # ── Protect against CUDA OOM on Colab T4 (15GB VRAM) ──
+    if torch.cuda.is_available():
+        vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)
+        if vram_gb < 20.0 and batch_size > 2:
+            print(f"[*] Detected {vram_gb:.1f} GB VRAM (T4 / mid-VRAM GPU).")
+            print(f"    Auto-clamping batch_size from {batch_size} -> 2 to prevent CUDA OutOfMemoryError.")
+            batch_size = 2
+        if vram_gb < 20.0 and max_len > 200:
+            print(f"    Auto-clamping max_len from {max_len} -> 200 frames for memory safety.")
+            max_len = 200
 
     if torch.cuda.is_available():
         torch.backends.cudnn.benchmark = True
@@ -281,6 +296,7 @@ def run_stage2_training(config_path: str = CONFIG_PATH):
     print(f"  Diff start   : epoch {diff_epoch}")
     print(f"  Joint start  : epoch {joint_epoch}")
     print(f"  Batch size   : {batch_size}")
+    print(f"  Max Mel Len  : {max_len}")
     print(f"  Device       : {device}  | FP16: {use_fp16}")
 
     # ── Data ─────────────────────────────────────────────────────────────────
@@ -405,6 +421,7 @@ def run_stage2_training(config_path: str = CONFIG_PATH):
     ).to(device)
 
     print(f"\n  Training from epoch {start_epoch + 1}...\n")
+    torch.cuda.empty_cache()
 
     # ══════════════════════════════════════════════════════════════════════════
     # Stage 2 Training Loop

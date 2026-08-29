@@ -21,6 +21,10 @@ Run BEFORE: Cell 07 (Stage 2)
 
 import os
 import sys
+
+# Prevent CUDA memory fragmentation on 16GB GPUs (like Colab T4)
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+
 import time
 import random
 import shutil
@@ -256,14 +260,25 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
         log.addHandler(file_handler)
 
     # 3. Hyperparameters from config
-    batch_size   = config.get("batch_size", 8)
+    batch_size   = config.get("batch_size", 2)
     epochs       = config.get("epochs_1st", 120)
     save_freq    = config.get("save_freq", 2)
     log_interval = config.get("log_interval", 10)
-    max_len      = config.get("max_len", 300)
+    max_len      = config.get("max_len", 200)
     loss_params  = Munch(config["loss_params"])
     TMA_epoch    = loss_params.TMA_epoch
     sr           = config["preprocess_params"].get("sr", 24000)
+
+    # ── Protect against CUDA OOM on Colab T4 (15GB VRAM) ──
+    if torch.cuda.is_available():
+        vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)
+        if vram_gb < 20.0 and batch_size > 2:
+            print(f"[*] Detected {vram_gb:.1f} GB VRAM (T4 / mid-VRAM GPU).")
+            print(f"    Auto-clamping batch_size from {batch_size} -> 2 to prevent CUDA OutOfMemoryError.")
+            batch_size = 2
+        if vram_gb < 20.0 and max_len > 200:
+            print(f"    Auto-clamping max_len from {max_len} -> 200 frames for memory safety.")
+            max_len = 200
 
     data_params = config["data_params"]
     train_list, val_list = get_data_path_list(
@@ -273,6 +288,7 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
     print(f"  Train samples : {len(train_list)}")
     print(f"  Val samples   : {len(val_list)}")
     print(f"  Batch size    : {batch_size}")
+    print(f"  Max Mel Len   : {max_len}")
     print(f"  Epochs        : {epochs}  (TMA starts @ epoch {TMA_epoch})")
     print(f"  Device        : {device}")
 
@@ -315,7 +331,7 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
     model_params = recursive_munch(config["model_params"])
     model = build_model(model_params, text_aligner, pitch_extractor, plbert)
 
-    # Add KionStyleAdapter to the model dict
+    # Add KionStyleAdapter to the model dict (retained on CPU for Stage 1)
     ksa_cfg = config["model_params"]["kion_style_adapter"]
     kion_style_adapter = KionStyleAdapter(
         num_emotions=ksa_cfg["num_emotions"],
@@ -324,10 +340,29 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
         latent_style_dim=ksa_cfg["latent_style_dim"],
         hidden_dim=ksa_cfg["hidden_dim"],
         dropout=ksa_cfg["dropout"],
-    ).to(device)
+    )
     model["kion_style_adapter"] = kion_style_adapter
 
-    # 7. Scheduler + optimiser
+    # ── Memory Optimization for Stage 1 ──────────────────────────────────────
+    # Stage 1 only trains: text_encoder, style_encoder, decoder, mpd, msd, wd,
+    # and (after TMA_epoch) text_aligner and pitch_extractor.
+    # Stage 2 modules (bert, bert_encoder, predictor, predictor_encoder, diffusion,
+    # and kion_style_adapter) are NEVER invoked in Stage 1. Keeping them on CPU
+    # saves ~2.5 GB of GPU VRAM on T4, leaving headroom for the iSTFTNet decoder.
+    stage1_active_keys = [
+        "text_encoder", "style_encoder", "decoder",
+        "text_aligner", "pitch_extractor",
+        "mpd", "msd", "wd"
+    ]
+
+    for k in model:
+        if k in stage1_active_keys:
+            model[k] = model[k].to(device)
+            model[k] = accelerator.prepare(model[k])
+        else:
+            model[k] = model[k].to("cpu")
+
+    # 7. Scheduler + optimiser (only allocate optimizer states for Stage 1 modules)
     scheduler_params = {
         "max_lr":           float(config["optimizer_params"].get("lr", 1e-4)),
         "pct_start":        0.0,
@@ -335,14 +370,12 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
         "steps_per_epoch":  len(train_dataloader),
     }
     optimizer = build_optimizer(
-        {k: model[k].parameters() for k in model},
-        scheduler_params_dict={k: scheduler_params.copy() for k in model},
+        {k: model[k].parameters() for k in stage1_active_keys if k in model},
+        scheduler_params_dict={k: scheduler_params.copy() for k in stage1_active_keys if k in model},
         lr=float(config["optimizer_params"].get("lr", 1e-4)),
     )
 
     # 8. Prepare with Accelerator
-    for k in model:
-        model[k] = accelerator.prepare(model[k])
     train_dataloader, val_dataloader = accelerator.prepare(
         train_dataloader, val_dataloader
     )
@@ -388,6 +421,7 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
     ).to(device)
 
     print(f"\n  Starting training from epoch {start_epoch + 1}...")
+    torch.cuda.empty_cache()
 
     # ──────────────────────────────────────────────────────────────────────────
     # 11. Training Loop
@@ -395,7 +429,7 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
     for epoch in range(start_epoch, epochs):
         epoch_start = time.time()
         running_loss = 0.0
-        _ = [model[k].train() for k in model]
+        _ = [model[k].train() for k in stage1_active_keys if k in model]
 
         pbar = tqdm(
             train_dataloader,
@@ -413,8 +447,15 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
                 text_mask = length_to_mask(input_lengths).to(device)
 
             # ASR aligner forward
-            ppgs, s2s_pred, s2s_attn = model["text_aligner"](mels, mask, texts)
-            s2s_attn = s2s_attn.transpose(-1, -2)[..., 1:].transpose(-1, -2)
+            # When epoch < TMA_epoch, text_aligner is frozen and no s2s/mono loss is backpropagated.
+            # Wrapping with no_grad() prevents saving huge ASR transformer attention activation graphs.
+            if epoch < TMA_epoch:
+                with torch.no_grad():
+                    ppgs, s2s_pred, s2s_attn = model["text_aligner"](mels, mask, texts)
+                    s2s_attn = s2s_attn.transpose(-1, -2)[..., 1:].transpose(-1, -2)
+            else:
+                ppgs, s2s_pred, s2s_attn = model["text_aligner"](mels, mask, texts)
+                s2s_attn = s2s_attn.transpose(-1, -2)[..., 1:].transpose(-1, -2)
 
             with torch.no_grad():
                 attn_mask = (
@@ -532,7 +573,7 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
                 running_loss = 0.0
 
         # ── Validation ────────────────────────────────────────────────────
-        _ = [model[k].eval() for k in model]
+        _ = [model[k].eval() for k in stage1_active_keys if k in model]
         loss_test = 0.0
         iters_test = 0
 
@@ -571,6 +612,8 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
                 loss_mel      = stft_loss(y_rec.squeeze(), wav.detach())
                 loss_test    += accelerator.gather(loss_mel).mean().item()
                 iters_test   += 1
+
+        torch.cuda.empty_cache()
 
         val_loss = loss_test / max(iters_test, 1)
         is_best  = val_loss < best_loss
