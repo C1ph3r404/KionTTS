@@ -110,7 +110,7 @@ def run_full_training(
     criterion = KionLoss().to(device)
     optimizer = optim.AdamW(model.parameters(), lr=lr, betas=(0.9, 0.98), weight_decay=1e-2)
     scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.99)
-    scaler = GradScaler(enabled=torch.cuda.is_available())
+    scaler = torch.amp.GradScaler("cuda", enabled=torch.cuda.is_available())
 
     # 4. Check for Resumption from Drive
     state, start_step, start_epoch, best_val_loss = ckpt_manager.load_checkpoint(device=device)
@@ -142,7 +142,7 @@ def run_full_training(
 
             optimizer.zero_grad()
 
-            with autocast(enabled=torch.cuda.is_available()):
+            with torch.amp.autocast("cuda", enabled=torch.cuda.is_available()):
                 predictions = model(
                     text_tokens=tokens,
                     style_weights=style_weights,
