@@ -143,7 +143,9 @@ class KionProsodyPredictor(nn.Module):
 
         # Predict durations
         pred_log_dur = self.duration_predictor(cond_text).squeeze(-1)  # (B, T_text)
-        pred_dur = torch.clamp(torch.round(torch.exp(pred_log_dur) - 1.0) / pace, min=1.0).long()
+        # In neural TTS at 24kHz with hop 256, phonemes average ~6-8 frames. Clamp min to 4 frames.
+        raw_dur = torch.exp(pred_log_dur)
+        pred_dur = torch.clamp(torch.round(raw_dur / pace), min=4, max=30).long()
 
         if target_durations is not None:
             dur_to_use = target_durations.long()
