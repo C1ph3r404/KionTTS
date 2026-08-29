@@ -28,6 +28,17 @@ import soundfile as sf
 from pathlib import Path
 from tqdm import tqdm
 
+# ─── PyTorch 2.6+ Compatibility ───────────────────────────────────────────────
+_orig_torch_load = torch.load
+def _compat_torch_load(*args, **kwargs):
+    if "weights_only" not in kwargs:
+        try:
+            return _orig_torch_load(*args, weights_only=False, **kwargs)
+        except TypeError:
+            return _orig_torch_load(*args, **kwargs)
+    return _orig_torch_load(*args, **kwargs)
+torch.load = _compat_torch_load
+
 def _get_repo_root() -> str:
     rel_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
     if os.path.exists(os.path.join(rel_path, "model")):

@@ -581,11 +581,18 @@ class DurationEncoder(nn.Module):
         mask = torch.gt(mask+1, lengths.unsqueeze(1))
         return mask
     
+def _safe_load(path, map_location='cpu'):
+    """Safe checkpoint loader compatible with PyTorch 2.6+ (weights_only=False)."""
+    try:
+        return torch.load(path, map_location=map_location, weights_only=False)
+    except TypeError:
+        return torch.load(path, map_location=map_location)
+
 def load_F0_models(path):
     # load F0 model
 
     F0_model = JDCNet(num_class=1, seq_len=192)
-    params = torch.load(path, map_location='cpu')['net']
+    params = _safe_load(path, map_location='cpu')['net']
     F0_model.load_state_dict(params)
     _ = F0_model.train()
     
@@ -601,7 +608,7 @@ def load_ASR_models(ASR_MODEL_PATH, ASR_MODEL_CONFIG):
 
     def _load_model(model_config, model_path):
         model = ASRCNN(**model_config)
-        params = torch.load(model_path, map_location='cpu')['model']
+        params = _safe_load(model_path, map_location='cpu')['model']
         model.load_state_dict(params)
         return model
 
@@ -694,7 +701,7 @@ def build_model(args, text_aligner, pitch_extractor, bert):
     return nets
 
 def load_checkpoint(model, optimizer, path, load_only_params=True, ignore_modules=[]):
-    state = torch.load(path, map_location='cpu')
+    state = _safe_load(path, map_location='cpu')
     params = state['net']
     for key in model:
         if key in params and key not in ignore_modules:

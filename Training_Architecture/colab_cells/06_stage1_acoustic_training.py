@@ -32,6 +32,18 @@ import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
+# ─── PyTorch 2.6+ Compatibility ───────────────────────────────────────────────
+# PyTorch 2.6 changed torch.load default to weights_only=True, which breaks legacy StyleTTS2 checkpoints.
+_orig_torch_load = torch.load
+def _compat_torch_load(*args, **kwargs):
+    if "weights_only" not in kwargs:
+        try:
+            return _orig_torch_load(*args, weights_only=False, **kwargs)
+        except TypeError:
+            return _orig_torch_load(*args, **kwargs)
+    return _orig_torch_load(*args, **kwargs)
+torch.load = _compat_torch_load
+
 warnings.simplefilter("ignore")
 
 # ─── Colab Paths ──────────────────────────────────────────────────────────────
