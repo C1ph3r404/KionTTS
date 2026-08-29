@@ -517,16 +517,18 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
                 optimizer.step("pitch_extractor")
 
             iters += 1
+            _to_num = lambda v: float(v.item()) if hasattr(v, "item") else float(v)
+
             pbar.set_postfix(
-                mel=f"{loss_mel:.4f}" if isinstance(loss_mel, float) else f"{loss_mel.item():.4f}",
-                gen=f"{loss_gen_all:.4f}" if isinstance(loss_gen_all, float) else f"{loss_gen_all.item():.4f}",
+                mel=f"{_to_num(loss_mel):.4f}",
+                gen=f"{_to_num(loss_gen_all):.4f}",
             )
 
             if (i + 1) % log_interval == 0 and accelerator.is_main_process:
                 avg = running_loss / log_interval
-                writer.add_scalar("train/mel_loss",  avg,       iters)
-                writer.add_scalar("train/gen_loss",  loss_gen_all if isinstance(loss_gen_all, float) else loss_gen_all.item(), iters)
-                writer.add_scalar("train/disc_loss", d_loss if isinstance(d_loss, float) else d_loss.item(), iters)
+                writer.add_scalar("train/mel_loss",  avg,                  iters)
+                writer.add_scalar("train/gen_loss",  _to_num(loss_gen_all), iters)
+                writer.add_scalar("train/disc_loss", _to_num(d_loss),     iters)
                 running_loss = 0.0
 
         # ── Validation ────────────────────────────────────────────────────
