@@ -71,7 +71,7 @@ def build_kion_config(
         # ── Logging & Checkpoints ──────────────────────────────────────────
         "log_dir":               LOG_DIR,
         "first_stage_path":      "kion_stage1.pth",
-        "save_freq":             2,
+        "save_freq":             1,
         "log_interval":          10,
         "device":                "cuda",
 

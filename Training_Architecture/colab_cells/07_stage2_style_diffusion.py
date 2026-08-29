@@ -645,15 +645,15 @@ def run_stage2_training(config_path: str = CONFIG_PATH):
 
         scheduler.step()
 
-        if (epoch + 1) % 2 == 0 or is_best:
-            state = {
-                "net":       {k: model[k].state_dict() for k in model},
-                "optimizer": optimizer.state_dict(),
-                "iters":     iters,
-                "val_loss":  val_loss,
-                "epoch":     epoch,
-            }
-            _save_to_drive(state, epoch + 1, is_best=is_best, stage="stage2")
+        # Save checkpoint every 1 epoch
+        state = {
+            "net":       {k: model[k].state_dict() for k in model},
+            "optimizer": optimizer.state_dict(),
+            "iters":     iters,
+            "val_loss":  val_loss,
+            "epoch":     epoch,
+        }
+        _save_to_drive(state, epoch + 1, is_best=is_best, stage="stage2")
 
     # ── Final save ────────────────────────────────────────────────────────────
     print("\n[+] Stage 2 training complete!")

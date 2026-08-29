@@ -262,7 +262,7 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
     # 3. Hyperparameters from config
     batch_size   = config.get("batch_size", 2)
     epochs       = config.get("epochs_1st", 120)
-    save_freq    = config.get("save_freq", 2)
+    save_freq    = 1  # Checkpoint every 1 epoch to ensure progress is saved to Drive
     log_interval = config.get("log_interval", 10)
     max_len      = config.get("max_len", 200)
     loss_params  = Munch(config["loss_params"])
