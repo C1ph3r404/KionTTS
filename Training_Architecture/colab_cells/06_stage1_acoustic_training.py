@@ -285,14 +285,15 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
         log.addHandler(file_handler)
 
     # 3. Hyperparameters from config
-    batch_size   = config.get("batch_size", 2)
-    epochs       = config.get("epochs_1st", 120)
-    save_freq    = 1  # Checkpoint every 1 epoch to ensure progress is saved to Drive
-    log_interval = config.get("log_interval", 10)
-    max_len      = config.get("max_len", 200)
-    loss_params  = Munch(config["loss_params"])
-    TMA_epoch    = loss_params.TMA_epoch
-    sr           = config["preprocess_params"].get("sr", 24000)
+    batch_size          = config.get("batch_size", 2)
+    epochs              = config.get("epochs_1st", 120)
+    save_freq           = 1  # Checkpoint every 1 epoch to ensure progress is saved to Drive
+    save_step_interval  = config.get("save_step_interval", 500)  # Checkpoint every 500 steps
+    log_interval        = config.get("log_interval", 10)
+    max_len             = config.get("max_len", 200)
+    loss_params         = Munch(config["loss_params"])
+    TMA_epoch           = loss_params.TMA_epoch
+    sr                  = config["preprocess_params"].get("sr", 24000)
 
     # ── Protect against CUDA OOM on Colab T4 (15GB VRAM) ──
     if torch.cuda.is_available():
@@ -594,8 +595,8 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
                 gen=f"{_to_num(loss_gen_all):.4f}",
             )
 
-            # ── Checkpoint every 100 steps ──
-            if iters % 100 == 0 and accelerator.is_main_process:
+            # ── Checkpoint every save_step_interval (500) steps ──
+            if iters % save_step_interval == 0 and accelerator.is_main_process:
                 state = {
                     "net":       {k: model[k].state_dict() for k in model},
                     "optimizer": optimizer.state_dict(),

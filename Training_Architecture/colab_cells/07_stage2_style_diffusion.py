@@ -295,13 +295,14 @@ def run_stage2_training(config_path: str = CONFIG_PATH):
     loss_params = Munch(config["loss_params"])
     diff_epoch  = loss_params.diff_epoch
     joint_epoch = loss_params.joint_epoch
-    epochs      = config.get("epochs_2nd", 60)
-    batch_size  = config.get("batch_size", 2)
-    max_len     = config.get("max_len", 200)
-    sr          = config["preprocess_params"].get("sr", 24000)
-    slmadv_cfg  = Munch(config.get("slmadv_params", {}))
-    device      = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    use_fp16    = torch.cuda.is_available()
+    epochs              = config.get("epochs_2nd", 60)
+    batch_size          = config.get("batch_size", 2)
+    max_len             = config.get("max_len", 200)
+    save_step_interval  = config.get("save_step_interval", 500)
+    sr                  = config["preprocess_params"].get("sr", 24000)
+    slmadv_cfg          = Munch(config.get("slmadv_params", {}))
+    device              = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    use_fp16            = torch.cuda.is_available()
 
     # ── Protect against CUDA OOM on Colab T4 (15GB VRAM) ──
     if torch.cuda.is_available():
@@ -603,8 +604,8 @@ def run_stage2_training(config_path: str = CONFIG_PATH):
                     diff=f"{loss_diff.item():.4f}" if epoch >= diff_epoch else "—",
                 )
 
-                # ── Checkpoint every 100 steps ──
-                if iters % 100 == 0:
+                # ── Checkpoint every save_step_interval (500) steps ──
+                if iters % save_step_interval == 0:
                     state = {
                         "net":       {k: model[k].state_dict() for k in model},
                         "optimizer": optimizer.state_dict(),
