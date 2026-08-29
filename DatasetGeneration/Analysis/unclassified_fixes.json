@@ -1,0 +1,1291 @@
+[
+  {
+    "id": "3ca11516",
+    "original_text": "[angry=0.4] Miss Abigail's sanitary stores, including a bottle of opodeldoc, were never called into requisition.",
+    "clean_text": "Miss Abigail's sanitary stores, including a bottle of opodeldoc, were never called into requisition.",
+    "emotion_tags": "[angry=0.4]",
+    "emotions": {
+      "angry": 0.4
+    },
+    "word_count": 14,
+    "char_count": 100,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "60a3877e",
+    "original_text": "[annoyed=0.4] And why not, when the very house is still handsomely preserved, where the nameless nobleman, Francis Le Baron, was concealed between the floors, and, as we are told in Mrs. Austen's novel, very properly capped the climax by marrying his brave little protector, Molly Wilder? Why not, when the Lincoln family, ancestors of Abraham, has been identified with the town since its settlement?",
+    "clean_text": "And why not, when the very house is still handsomely preserved, where the nameless nobleman, Francis Le Baron, was concealed between the floors, and, as we are told in Mrs. Austen's novel, very properly capped the climax by marrying his brave little protector, Molly Wilder? Why not, when the Lincoln family, ancestors of Abraham, has been identified with the town since its settlement?",
+    "emotion_tags": "[annoyed=0.4]",
+    "emotions": {
+      "annoyed": 0.4
+    },
+    "word_count": 63,
+    "char_count": 386,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "f99020a1",
+    "original_text": "[playful=0.8] Indeed I understood that my only hope of deliverance lay in being picked up; and that, though by heading east I should be clinging to the stormy parts, I was more likely to meet with a ship hereabouts than by sailing into the great desolation of the north-west.",
+    "clean_text": "Indeed I understood that my only hope of deliverance lay in being picked up; and that, though by heading east I should be clinging to the stormy parts, I was more likely to meet with a ship hereabouts than by sailing into the great desolation of the north-west.",
+    "emotion_tags": "[playful=0.8]",
+    "emotions": {
+      "playful": 0.8
+    },
+    "word_count": 48,
+    "char_count": 261,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "562e5539",
+    "original_text": "[bored=0.8] \"You don't go to service, I observe, Mr. Montgomery\" said he, coldly.",
+    "clean_text": "\"You don't go to service, I observe, Mr. Montgomery\" said he, coldly.",
+    "emotion_tags": "[bored=0.8]",
+    "emotions": {
+      "bored": 0.8
+    },
+    "word_count": 12,
+    "char_count": 69,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "c722e143",
+    "original_text": "None could be reached by telephone.",
+    "clean_text": "None could be reached by telephone.",
+    "emotion_tags": "",
+    "emotions": {},
+    "word_count": 6,
+    "char_count": 35,
+    "num_emotions": 0,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "82d488b0",
+    "original_text": "[disappointed=0.6] Or it might have been that he became neither the one nor the other, in pursuance of an idea of his which I have already mentioned-the idea, that in the contempt of ambition lay one of the essential principles of happiness on earth. Is it not, indeed, possible that while a high order of genius is necessarily ambitious, the highest is invariably above that which is termed ambition?",
+    "clean_text": "Or it might have been that he became neither the one nor the other, in pursuance of an idea of his which I have already mentioned-the idea, that in the contempt of ambition lay one of the essential principles of happiness on earth. Is it not, indeed, possible that while a high order of genius is necessarily ambitious, the highest is invariably above that which is termed ambition?",
+    "emotion_tags": "[disappointed=0.6]",
+    "emotions": {
+      "disappointed": 0.6
+    },
+    "word_count": 68,
+    "char_count": 382,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "84bb2646",
+    "original_text": "[annoyed=0.5] After considerable dickering, with signs and gestures and words many times repeated, we were able to impart the information that we wanted a lesson in cookery.",
+    "clean_text": "After considerable dickering, with signs and gestures and words many times repeated, we were able to impart the information that we wanted a lesson in cookery.",
+    "emotion_tags": "[annoyed=0.5]",
+    "emotions": {
+      "annoyed": 0.5
+    },
+    "word_count": 26,
+    "char_count": 159,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "7afe52e8",
+    "original_text": "[serious=0.3] Nothing happened to him, and so he grew careless and made people wait for him just because he was not quite ready to go with them, or because he wanted to do this or look at that or talk to some other person.",
+    "clean_text": "Nothing happened to him, and so he grew careless and made people wait for him just because he was not quite ready to go with them, or because he wanted to do this or look at that or talk to some other person.",
+    "emotion_tags": "[serious=0.3]",
+    "emotions": {
+      "serious": 0.3
+    },
+    "word_count": 43,
+    "char_count": 208,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "7d4190c1",
+    "original_text": "[dramatic=0.4] But many of them are so connected in his thought by chains of association with pleasures or uses, that almost instinctively and most intensely he attaches an importance to them.",
+    "clean_text": "But many of them are so connected in his thought by chains of association with pleasures or uses, that almost instinctively and most intensely he attaches an importance to them.",
+    "emotion_tags": "[dramatic=0.4]",
+    "emotions": {
+      "dramatic": 0.4
+    },
+    "word_count": 30,
+    "char_count": 177,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "be06df00",
+    "original_text": "[serious=0.8] The automatic lifted until the muzzle was on a line with Carling's eyes.",
+    "clean_text": "The automatic lifted until the muzzle was on a line with Carling's eyes.",
+    "emotion_tags": "[serious=0.8]",
+    "emotions": {
+      "serious": 0.8
+    },
+    "word_count": 13,
+    "char_count": 72,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "be06df00",
+    "original_text": "[serious=0.8] The automatic lifted until the muzzle was on a line with Carling's eyes.",
+    "clean_text": "The automatic lifted until the muzzle was on a line with Carling's eyes.",
+    "emotion_tags": "[serious=0.8]",
+    "emotions": {
+      "serious": 0.8
+    },
+    "word_count": 13,
+    "char_count": 72,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "b2c71c31",
+    "original_text": "[frustrated=0.4] She hates that rascal intensely, and he has a terrible influence over her.",
+    "clean_text": "She hates that rascal intensely, and he has a terrible influence over her.",
+    "emotion_tags": "[frustrated=0.4]",
+    "emotions": {
+      "frustrated": 0.4
+    },
+    "word_count": 13,
+    "char_count": 74,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "490f13c7",
+    "original_text": "[disappointed=0.5] At some of the houses-where they can't possibly know me-I shan't be frightened, and I shall reel off the whole rigmarole, invalid, babe, and all.",
+    "clean_text": "At some of the houses-where they can't possibly know me-I shan't be frightened, and I shall reel off the whole rigmarole, invalid, babe, and all.",
+    "emotion_tags": "[disappointed=0.5]",
+    "emotions": {
+      "disappointed": 0.5
+    },
+    "word_count": 25,
+    "char_count": 145,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "62476cd0",
+    "original_text": "[teasing=0.4] We would soon settle this important point.",
+    "clean_text": "We would soon settle this important point.",
+    "emotion_tags": "[teasing=0.4]",
+    "emotions": {
+      "teasing": 0.4
+    },
+    "word_count": 7,
+    "char_count": 42,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "0b68e319",
+    "original_text": "[happy=0.5] First and last, a good many men have gone gunning for me, but they've always planned the obsequies before they caught the deceased.",
+    "clean_text": "First and last, a good many men have gone gunning for me, but they've always planned the obsequies before they caught the deceased.",
+    "emotion_tags": "[happy=0.5]",
+    "emotions": {
+      "happy": 0.5
+    },
+    "word_count": 23,
+    "char_count": 131,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "92d275b1",
+    "original_text": "[happy=0.5] These biscuits formed a great part of our daily diet, and undoubtedly contributed in no small degree to the successful result.",
+    "clean_text": "These biscuits formed a great part of our daily diet, and undoubtedly contributed in no small degree to the successful result.",
+    "emotion_tags": "[happy=0.5]",
+    "emotions": {
+      "happy": 0.5
+    },
+    "word_count": 21,
+    "char_count": 126,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "f6df4804",
+    "original_text": "[bored=0.3] \"It is so; but they are now bright and dull; for the Yengeese are dead, and the Delawares are our neighbors.\"",
+    "clean_text": "\"It is so; but they are now bright and dull; for the Yengeese are dead, and the Delawares are our neighbors.\"",
+    "emotion_tags": "[bored=0.3]",
+    "emotions": {
+      "bored": 0.3
+    },
+    "word_count": 21,
+    "char_count": 109,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "f038b468",
+    "original_text": "[teasing=0.5] Those of his contemporaries who have harkened with rapture to his playing have declared that he alone could adequately interpret his tone creations, or make perfectly intelligible his method.",
+    "clean_text": "Those of his contemporaries who have harkened with rapture to his playing have declared that he alone could adequately interpret his tone creations, or make perfectly intelligible his method.",
+    "emotion_tags": "[teasing=0.5]",
+    "emotions": {
+      "teasing": 0.5
+    },
+    "word_count": 29,
+    "char_count": 191,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "14e1ab40",
+    "original_text": "[deadpan=0.4] They entered the crazy looking vehicle and found the seats ample and comfortable despite the appearance of dilapidation everywhere prevalent. The driver mounted the box, cracked his whip, and the lean nags ambled away at a fair pace.",
+    "clean_text": "They entered the crazy looking vehicle and found the seats ample and comfortable despite the appearance of dilapidation everywhere prevalent. The driver mounted the box, cracked his whip, and the lean nags ambled away at a fair pace.",
+    "emotion_tags": "[deadpan=0.4]",
+    "emotions": {
+      "deadpan": 0.4
+    },
+    "word_count": 38,
+    "char_count": 233,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "38af7ac7",
+    "original_text": "[frustrated=0.3] In compliance with your request, I have the honor to state, succinctly, the circumstances connected with my acquaintance with the late Madame Ossoli, your deceased sister, during her residence in Rome.",
+    "clean_text": "In compliance with your request, I have the honor to state, succinctly, the circumstances connected with my acquaintance with the late Madame Ossoli, your deceased sister, during her residence in Rome.",
+    "emotion_tags": "[frustrated=0.3]",
+    "emotions": {
+      "frustrated": 0.3
+    },
+    "word_count": 31,
+    "char_count": 201,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "4b925386",
+    "original_text": "[concerned=0.7, serious=0.7] The Indians had left the neighborhood, but from time to time brought in meagre supplies of fish, which they sold to the famished soldiers at exorbitant prices.",
+    "clean_text": "[concerned=0.7, serious=0.7] The Indians had left the neighborhood, but from time to time brought in meagre supplies of fish, which they sold to the famished soldiers at exorbitant prices.",
+    "emotion_tags": "[concerned=0.7] [serious=0.7]",
+    "emotions": {
+      "concerned": 0.7,
+      "serious": 0.7
+    },
+    "word_count": 29,
+    "char_count": 188,
+    "num_emotions": 2,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "5328589c",
+    "original_text": "[calm=0.4] The herdsmen and fishermen were indeed ready to rally round Mac Callum More; but, of the heads of the clan, some were in confinement, and others had fled.",
+    "clean_text": "The herdsmen and fishermen were indeed ready to rally round Mac Callum More; but, of the heads of the clan, some were in confinement, and others had fled.",
+    "emotion_tags": "[calm=0.4]",
+    "emotions": {
+      "calm": 0.4
+    },
+    "word_count": 28,
+    "char_count": 154,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "22fac03b",
+    "original_text": "[playful=0.4] When it had become definitely known that such was the enormous wealth inherited, there were, of course, many speculations as to the mode of its disposal.",
+    "clean_text": "When it had become definitely known that such was the enormous wealth inherited, there were, of course, many speculations as to the mode of its disposal.",
+    "emotion_tags": "[playful=0.4]",
+    "emotions": {
+      "playful": 0.4
+    },
+    "word_count": 26,
+    "char_count": 153,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "7fdf00bc",
+    "original_text": "[curious=0.5] This, also, she thought was the work of Jegu, and she could not help feeling that a husband of this sort would be very useful to a girl who liked to lie in bed and to amuse herself.",
+    "clean_text": "This, also, she thought was the work of Jegu, and she could not help feeling that a husband of this sort would be very useful to a girl who liked to lie in bed and to amuse herself.",
+    "emotion_tags": "[curious=0.5]",
+    "emotions": {
+      "curious": 0.5
+    },
+    "word_count": 38,
+    "char_count": 181,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "d850a763",
+    "original_text": "[playful=0.3] At first, when she put me down on a stone in some water, I did not know that I was in prison.",
+    "clean_text": "At first, when she put me down on a stone in some water, I did not know that I was in prison.",
+    "emotion_tags": "[playful=0.3]",
+    "emotions": {
+      "playful": 0.3
+    },
+    "word_count": 22,
+    "char_count": 93,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "ac09a626",
+    "original_text": "[dramatic=0.4] When the Emperor Maximus heard that the Vandals were coming he prepared to flee from the city, and he advised the Senate to do the same.",
+    "clean_text": "When the Emperor Maximus heard that the Vandals were coming he prepared to flee from the city, and he advised the Senate to do the same.",
+    "emotion_tags": "[dramatic=0.4]",
+    "emotions": {
+      "dramatic": 0.4
+    },
+    "word_count": 26,
+    "char_count": 136,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "104adc47",
+    "original_text": "[disappointed=0.4] He came several times, knocked at my door, and begged me to see him, but I would not. Heaven forgive me!—I would not!",
+    "clean_text": "He came several times, knocked at my door, and begged me to see him, but I would not. Heaven forgive me!—I would not!",
+    "emotion_tags": "[disappointed=0.4]",
+    "emotions": {
+      "disappointed": 0.4
+    },
+    "word_count": 23,
+    "char_count": 117,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "be18d934",
+    "original_text": "[deadpan=0.7] With young boys who through unfortunate influence have caught a tendency, for instance, to steal, and where the fault does not yield to sympathetic reasoning and to punishment, an early hypnotic treatment might certainly be tried.",
+    "clean_text": "With young boys who through unfortunate influence have caught a tendency, for instance, to steal, and where the fault does not yield to sympathetic reasoning and to punishment, an early hypnotic treatment might certainly be tried.",
+    "emotion_tags": "[deadpan=0.7]",
+    "emotions": {
+      "deadpan": 0.7
+    },
+    "word_count": 36,
+    "char_count": 230,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "db6e6b6e",
+    "original_text": "[heartbroken=0.9, affectionate=0.6] To be brilliant physically or mentally, to be in any way attractive or exceptional, had been and was still a certain way of emancipation to the drudge, a line of escape to the Pleasure City and its splendours and delights, and at last to the Euthanasy and peace.",
+    "clean_text": "[heartbroken=0.9, affectionate=0.6] To be brilliant physically or mentally, to be in any way attractive or exceptional, had been and was still a certain way of emancipation to the drudge, a line of escape to the Pleasure City and its splendours and delights, and at last to the Euthanasy and peace.",
+    "emotion_tags": "[affectionate=0.6] [heartbroken=0.9]",
+    "emotions": {
+      "heartbroken": 0.9,
+      "affectionate": 0.6
+    },
+    "word_count": 50,
+    "char_count": 298,
+    "num_emotions": 2,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "dc7d15e1",
+    "original_text": "[sarcasm=0.3] The mind does not err in the mere act of imagining, but only in so far as it is regarded as being without the idea, which excludes the existence of such things as it imagines to be present to it.",
+    "clean_text": "The mind does not err in the mere act of imagining, but only in so far as it is regarded as being without the idea, which excludes the existence of such things as it imagines to be present to it.",
+    "emotion_tags": "[sarcasm=0.3]",
+    "emotions": {
+      "sarcasm": 0.3
+    },
+    "word_count": 40,
+    "char_count": 195,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "fa221bb4",
+    "original_text": "[disappointed=0.4] Smoke continued to rub against its cheek and nose and eyes, sometimes even standing on its body and kneading into the thick yellow hair.",
+    "clean_text": "Smoke continued to rub against its cheek and nose and eyes, sometimes even standing on its body and kneading into the thick yellow hair.",
+    "emotion_tags": "[disappointed=0.4]",
+    "emotions": {
+      "disappointed": 0.4
+    },
+    "word_count": 24,
+    "char_count": 136,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "0fd747a0",
+    "original_text": "[curious=0.5] But the consideration of these points, and the well balancing of what you may esteem your duties, I leave to you; my judgment and ideas are already disturbed by the near approach of death.",
+    "clean_text": "But the consideration of these points, and the well balancing of what you may esteem your duties, I leave to you; my judgment and ideas are already disturbed by the near approach of death.",
+    "emotion_tags": "[curious=0.5]",
+    "emotions": {
+      "curious": 0.5
+    },
+    "word_count": 34,
+    "char_count": 188,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "985336ef",
+    "original_text": "[happy=0.5] The night was beautiful: there was no cloud in the sky: there was no wind; and the strong moonlight threw down sharp black shadows of foliage, and glittered on the dews of the garden.",
+    "clean_text": "The night was beautiful: there was no cloud in the sky: there was no wind; and the strong moonlight threw down sharp black shadows of foliage, and glittered on the dews of the garden.",
+    "emotion_tags": "[happy=0.5]",
+    "emotions": {
+      "happy": 0.5
+    },
+    "word_count": 34,
+    "char_count": 183,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "10df5846",
+    "original_text": "[affectionate=0.3] My thoughts went back to wife and baby in the lonely cabin on the Columbia River, and again to that bargain we had made before marriage, that we were going to be farmers.",
+    "clean_text": "My thoughts went back to wife and baby in the lonely cabin on the Columbia River, and again to that bargain we had made before marriage, that we were going to be farmers.",
+    "emotion_tags": "[affectionate=0.3]",
+    "emotions": {
+      "affectionate": 0.3
+    },
+    "word_count": 33,
+    "char_count": 170,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "660fdfc1",
+    "original_text": "[playful=0.4] He hadn't pretended he did, but there was a purity of reproach in Mrs. Stringham's face and tone, a purity charged apparently with solemn meanings; so that for a little, small as had been his claim, he couldn't but feel that she exaggerated.",
+    "clean_text": "He hadn't pretended he did, but there was a purity of reproach in Mrs. Stringham's face and tone, a purity charged apparently with solemn meanings; so that for a little, small as had been his claim, he couldn't but feel that she exaggerated.",
+    "emotion_tags": "[playful=0.4]",
+    "emotions": {
+      "playful": 0.4
+    },
+    "word_count": 43,
+    "char_count": 241,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "18720af8",
+    "original_text": "[teasing=0.4] The ideal of such mental hygiene is the complete equilibrium of all mental energies together with their fullest possible development.",
+    "clean_text": "The ideal of such mental hygiene is the complete equilibrium of all mental energies together with their fullest possible development.",
+    "emotion_tags": "[teasing=0.4]",
+    "emotions": {
+      "teasing": 0.4
+    },
+    "word_count": 20,
+    "char_count": 133,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "7bd3f729",
+    "original_text": "[playful=0.3] The quiet town seemed suddenly inundated with children, all in such a rampant state that busy mothers wondered how they ever should be able to keep their frisky darlings out of mischief; thrifty fathers planned how they could bribe the idle hands to pick berries or rake hay; and the old folks, while wishing the young folks well, secretly blessed the man who invented schools.",
+    "clean_text": "The quiet town seemed suddenly inundated with children, all in such a rampant state that busy mothers wondered how they ever should be able to keep their frisky darlings out of mischief; thrifty fathers planned how they could bribe the idle hands to pick berries or rake hay; and the old folks, while wishing the young folks well, secretly blessed the man who invented schools.",
+    "emotion_tags": "[playful=0.3]",
+    "emotions": {
+      "playful": 0.3
+    },
+    "word_count": 65,
+    "char_count": 377,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "df7af819",
+    "original_text": "[concerned=0.7] Deasey had craved for corpses, but nothing so grim as that had risen to his whisky bait until he tried the same old game on Mrs. Geraghty.",
+    "clean_text": "Deasey had craved for corpses, but nothing so grim as that had risen to his whisky bait until he tried the same old game on Mrs. Geraghty.",
+    "emotion_tags": "[concerned=0.7]",
+    "emotions": {
+      "concerned": 0.7
+    },
+    "word_count": 27,
+    "char_count": 138,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "41777f4f",
+    "original_text": "[angry=0.7, authoritative=0.8] They dreamt dreams, in truth, he appeared to perceive, that fairly waked HIM up, and he settled himself in his place both to resist his embarrassment and to catch the full revelation.",
+    "clean_text": "[angry=0.7, authoritative=0.8] They dreamt dreams, in truth, he appeared to perceive, that fairly waked HIM up, and he settled himself in his place both to resist his embarrassment and to catch the full revelation.",
+    "emotion_tags": "[angry=0.7] [authoritative=0.8]",
+    "emotions": {
+      "angry": 0.7,
+      "authoritative": 0.8
+    },
+    "word_count": 34,
+    "char_count": 214,
+    "num_emotions": 2,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "1a908a1e",
+    "original_text": "[angry=0.4] He picked it up and ran his fingers over the strings-trum, twang! Then he got to his feet and brushed the dirt and grass from his knees. He tucked his fiddle under his arm, and off he stepped upon the way he had been going at first.",
+    "clean_text": "He picked it up and ran his fingers over the strings-trum, twang! Then he got to his feet and brushed the dirt and grass from his knees. He tucked his fiddle under his arm, and off he stepped upon the way he had been going at first.",
+    "emotion_tags": "[angry=0.4]",
+    "emotions": {
+      "angry": 0.4
+    },
+    "word_count": 47,
+    "char_count": 232,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "99a3acf0",
+    "original_text": "[disappointed=0.8] At nightfall they arrived at a castle and the lady thereof came out at the head of her damsels to welcome Sir Gawain.",
+    "clean_text": "At nightfall they arrived at a castle and the lady thereof came out at the head of her damsels to welcome Sir Gawain.",
+    "emotion_tags": "[disappointed=0.8]",
+    "emotions": {
+      "disappointed": 0.8
+    },
+    "word_count": 23,
+    "char_count": 117,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "cd1e8bda",
+    "original_text": "[overjoyed=0.6] When he came to himself, Natasha, that same living Natasha whom of all people he most longed to love with this new pure divine love that had been revealed to him, was kneeling before him.",
+    "clean_text": "When he came to himself, Natasha, that same living Natasha whom of all people he most longed to love with this new pure divine love that had been revealed to him, was kneeling before him.",
+    "emotion_tags": "[overjoyed=0.6]",
+    "emotions": {
+      "overjoyed": 0.6
+    },
+    "word_count": 35,
+    "char_count": 187,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "cf779705",
+    "original_text": "[sad=0.7, affectionate=0.6] You are leaving suspicion on an honest boy with a good deal against him already; you are separating him from the woman he loves and who loves him.",
+    "clean_text": "[sad=0.7, affectionate=0.6] You are leaving suspicion on an honest boy with a good deal against him already; you are separating him from the woman he loves and who loves him.",
+    "emotion_tags": "[affectionate=0.6] [sad=0.7]",
+    "emotions": {
+      "sad": 0.7,
+      "affectionate": 0.6
+    },
+    "word_count": 30,
+    "char_count": 174,
+    "num_emotions": 2,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "7c9f0d21",
+    "original_text": "[curious=0.3] Among these was to be seen every variety of age, sentiment, and condition,—striplings and blanched heads; wild, visionary enthusiasts; grave, heroic men, who, in the struggle for freedom, had ventured all, and lost all; nobles and beggars; bandits, felons and brigands.",
+    "clean_text": "Among these was to be seen every variety of age, sentiment, and condition,—striplings and blanched heads; wild, visionary enthusiasts; grave, heroic men, who, in the struggle for freedom, had ventured all, and lost all; nobles and beggars; bandits, felons and brigands.",
+    "emotion_tags": "[curious=0.3]",
+    "emotions": {
+      "curious": 0.3
+    },
+    "word_count": 41,
+    "char_count": 269,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "7d48738b",
+    "original_text": "[serious=0.8] A couple of ruffians were fighting for this innocent creature, gambling for her at her own table, and though she was not aware of the rascals' designs upon her, yet she felt a horror and uneasiness in their presence and longed to fly.",
+    "clean_text": "A couple of ruffians were fighting for this innocent creature, gambling for her at her own table, and though she was not aware of the rascals' designs upon her, yet she felt a horror and uneasiness in their presence and longed to fly.",
+    "emotion_tags": "[serious=0.8]",
+    "emotions": {
+      "serious": 0.8
+    },
+    "word_count": 43,
+    "char_count": 234,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "ef102ae3",
+    "original_text": "[happy=0.4] My aim here is the more general one, of indicating first the characteristic experiences-discoverable within all great religions-which justify or are fundamental to the spiritual life, and the way in which these experiences may be accommodated to the world view of the modern man: and next, the nature of that spiritual life as it appears in human history.",
+    "clean_text": "My aim here is the more general one, of indicating first the characteristic experiences-discoverable within all great religions-which justify or are fundamental to the spiritual life, and the way in which these experiences may be accommodated to the world view of the modern man: and next, the nature of that spiritual life as it appears in human history.",
+    "emotion_tags": "[happy=0.4]",
+    "emotions": {
+      "happy": 0.4
+    },
+    "word_count": 58,
+    "char_count": 355,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "719ca5c5",
+    "original_text": "[playful=0.8] \"Are they Spanish, Haitian, or Neapolitan bonds?\" said Monte Cristo.",
+    "clean_text": "\"Are they Spanish, Haitian, or Neapolitan bonds?\" said Monte Cristo.",
+    "emotion_tags": "[playful=0.8]",
+    "emotions": {
+      "playful": 0.8
+    },
+    "word_count": 10,
+    "char_count": 68,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "0dc88238",
+    "original_text": "[happy=0.5] Circe, seated on a throne, with her back to a great circular mirror, presents a half draped figure of marvellous delicate colouring and beauty of outline.",
+    "clean_text": "Circe, seated on a throne, with her back to a great circular mirror, presents a half draped figure of marvellous delicate colouring and beauty of outline.",
+    "emotion_tags": "[happy=0.5]",
+    "emotions": {
+      "happy": 0.5
+    },
+    "word_count": 26,
+    "char_count": 154,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "4b910dd6",
+    "original_text": "[angry=0.8, dramatic=0.8] The thought of your scorn at my previous ignorance of the world famous Tillier, your amused contempt because I have only just succeeded in borrowing the classic upon which you were brought up, this is too much for me. Let us say no more about it.",
+    "clean_text": "[angry=0.8, dramatic=0.8] The thought of your scorn at my previous ignorance of the world famous Tillier, your amused contempt because I have only just succeeded in borrowing the classic upon which you were brought up, this is too much for me. Let us say no more about it.",
+    "emotion_tags": "[angry=0.8] [dramatic=0.8]",
+    "emotions": {
+      "angry": 0.8,
+      "dramatic": 0.8
+    },
+    "word_count": 48,
+    "char_count": 272,
+    "num_emotions": 2,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "95ee97ba",
+    "original_text": "[bored=0.7] Splendid is the road and delightful the country coming east from Girard; even the red brick school houses are embowered amid leafy groves; and so it continues with ever varying, ever pleasing beauty to Erie, after which the highway becomes hardly so good.",
+    "clean_text": "Splendid is the road and delightful the country coming east from Girard; even the red brick school houses are embowered amid leafy groves; and so it continues with ever varying, ever pleasing beauty to Erie, after which the highway becomes hardly so good.",
+    "emotion_tags": "[bored=0.7]",
+    "emotions": {
+      "bored": 0.7
+    },
+    "word_count": 43,
+    "char_count": 255,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "20452996",
+    "original_text": "[disappointed=0.3] Born and bred on Poland's soil, son of a French father and a Polish mother, Frederic Chopin (eighteen o nine to eighteen forty nine) combined within himself two natures, each complementing the other, both uniting to form a personality not understood by every casual observer.",
+    "clean_text": "Born and bred on Poland's soil, son of a French father and a Polish mother, Frederic Chopin (eighteen o nine to eighteen forty nine) combined within himself two natures, each complementing the other, both uniting to form a personality not understood by every casual observer.",
+    "emotion_tags": "[disappointed=0.3]",
+    "emotions": {
+      "disappointed": 0.3
+    },
+    "word_count": 45,
+    "char_count": 275,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "7e2d5aa9",
+    "original_text": "They try and weigh their affection, and adding up costly advantages, friends, opportunities, properties, exult in discovering that willingly, joyfully, they would give all as a ransom for the beautiful, the beloved head, not one hair of which shall be harmed. But the lot of humanity is on these children.",
+    "clean_text": "They try and weigh their affection, and adding up costly advantages, friends, opportunities, properties, exult in discovering that willingly, joyfully, they would give all as a ransom for the beautiful, the beloved head, not one hair of which shall be harmed. But the lot of humanity is on these children.",
+    "emotion_tags": "",
+    "emotions": {},
+    "word_count": 50,
+    "char_count": 305,
+    "num_emotions": 0,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "e9ea8256",
+    "original_text": "Or it might have been that he became neither the one nor the other, in pursuance of an idea of his which I have already mentioned-the idea, that in the contempt of ambition lay one of the essential principles of happiness on earth. Is it not, indeed, possible that while a high order of genius is necessarily ambitious, the highest is invariably above that which is termed ambition?",
+    "clean_text": "Or it might have been that he became neither the one nor the other, in pursuance of an idea of his which I have already mentioned-the idea, that in the contempt of ambition lay one of the essential principles of happiness on earth. Is it not, indeed, possible that while a high order of genius is necessarily ambitious, the highest is invariably above that which is termed ambition?",
+    "emotion_tags": "",
+    "emotions": {},
+    "word_count": 68,
+    "char_count": 382,
+    "num_emotions": 0,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "2bfcaba6",
+    "original_text": "[concerned=0.7] There was a momentary silence, broken by Simple Simon, who wiped his knife on his tongue, and made a wild attack on the butter dish.",
+    "clean_text": "There was a momentary silence, broken by Simple Simon, who wiped his knife on his tongue, and made a wild attack on the butter dish.",
+    "emotion_tags": "[concerned=0.7]",
+    "emotions": {
+      "concerned": 0.7
+    },
+    "word_count": 25,
+    "char_count": 132,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "38132da4",
+    "original_text": "[authoritative=0.8] England was still secure.",
+    "clean_text": "England was still secure.",
+    "emotion_tags": "[authoritative=0.8]",
+    "emotions": {
+      "authoritative": 0.8
+    },
+    "word_count": 4,
+    "char_count": 25,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "d7ccaca8",
+    "original_text": "[excited=0.6] The revenue of its possessor, which had always found a mode of expenditure congenial to his generous nature, was now attended to more parsimoniously, that it might embrace a wider portion of utility.",
+    "clean_text": "The revenue of its possessor, which had always found a mode of expenditure congenial to his generous nature, was now attended to more parsimoniously, that it might embrace a wider portion of utility.",
+    "emotion_tags": "[excited=0.6]",
+    "emotions": {
+      "excited": 0.6
+    },
+    "word_count": 33,
+    "char_count": 199,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "b53426dd",
+    "original_text": "[overjoyed=0.5] So I leave him home, for I am kind.",
+    "clean_text": "So I leave him home, for I am kind.",
+    "emotion_tags": "[overjoyed=0.5]",
+    "emotions": {
+      "overjoyed": 0.5
+    },
+    "word_count": 9,
+    "char_count": 35,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "d269290c",
+    "original_text": "[excited=0.6] In Texas the title would have counted for little; nor did its owner care to carry it.",
+    "clean_text": "In Texas the title would have counted for little; nor did its owner care to carry it.",
+    "emotion_tags": "[excited=0.6]",
+    "emotions": {
+      "excited": 0.6
+    },
+    "word_count": 17,
+    "char_count": 85,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "6c40c6da",
+    "original_text": "[curious=0.5] Then I called out to Elzevir, and he, guessing what had come over me, cries to turn upon my side, and press my belly to the cliff.",
+    "clean_text": "Then I called out to Elzevir, and he, guessing what had come over me, cries to turn upon my side, and press my belly to the cliff.",
+    "emotion_tags": "[curious=0.5]",
+    "emotions": {
+      "curious": 0.5
+    },
+    "word_count": 27,
+    "char_count": 130,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "4d506678",
+    "original_text": "[frustrated=0.7] Hans is a clever fellow, and I am sure he must have saved a large part of our cargo.",
+    "clean_text": "Hans is a clever fellow, and I am sure he must have saved a large part of our cargo.",
+    "emotion_tags": "[frustrated=0.7]",
+    "emotions": {
+      "frustrated": 0.7
+    },
+    "word_count": 19,
+    "char_count": 84,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "69e467aa",
+    "original_text": "[disappointed=0.5] But if you have softened the form, you are none the less faithful to the ground work of your doctrines; and although you have done me the honor to give me a share in this perilous teaching, I cannot accept a partnership which, as far as talent goes, would surely be a credit to me, but which would compromise me in all other respects.",
+    "clean_text": "But if you have softened the form, you are none the less faithful to the ground work of your doctrines; and although you have done me the honor to give me a share in this perilous teaching, I cannot accept a partnership which, as far as talent goes, would surely be a credit to me, but which would compromise me in all other respects.",
+    "emotion_tags": "[disappointed=0.5]",
+    "emotions": {
+      "disappointed": 0.5
+    },
+    "word_count": 64,
+    "char_count": 334,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "80f16b7b",
+    "original_text": "[authoritative=0.8] Your father's won-you're going to do what he wants.",
+    "clean_text": "Your father's won-you're going to do what he wants.",
+    "emotion_tags": "[authoritative=0.8]",
+    "emotions": {
+      "authoritative": 0.8
+    },
+    "word_count": 9,
+    "char_count": 51,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "f66ecd7c",
+    "original_text": "[annoyed=0.8] This is partly pleasing to the eye, by the show of order and design, and partly moral.",
+    "clean_text": "This is partly pleasing to the eye, by the show of order and design, and partly moral.",
+    "emotion_tags": "[annoyed=0.8]",
+    "emotions": {
+      "annoyed": 0.8
+    },
+    "word_count": 17,
+    "char_count": 86,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "e87b73e2",
+    "original_text": "[curious=0.5] Adam could never cease to mourn over that mystery of human sorrow which had been brought so close to him; he could never thank God for another's misery.",
+    "clean_text": "Adam could never cease to mourn over that mystery of human sorrow which had been brought so close to him; he could never thank God for another's misery.",
+    "emotion_tags": "[curious=0.5]",
+    "emotions": {
+      "curious": 0.5
+    },
+    "word_count": 28,
+    "char_count": 152,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "29e9d496",
+    "original_text": "[angry=0.7, authoritative=0.8] \"I'll tell you, \" proffered the obliging and innocent Mr. Murphy.",
+    "clean_text": "[angry=0.7, authoritative=0.8] \"I'll tell you, \" proffered the obliging and innocent Mr. Murphy.",
+    "emotion_tags": "[angry=0.7] [authoritative=0.8]",
+    "emotions": {
+      "angry": 0.7,
+      "authoritative": 0.8
+    },
+    "word_count": 13,
+    "char_count": 96,
+    "num_emotions": 2,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "91b33ac4",
+    "original_text": "[teasing=0.5] 'What!",
+    "clean_text": "'What!",
+    "emotion_tags": "[teasing=0.5]",
+    "emotions": {
+      "teasing": 0.5
+    },
+    "word_count": 1,
+    "char_count": 6,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "552f6fab",
+    "original_text": "[angry=0.7] We should not understand that either social or private objective incomes include only material goods, for many utilities and labor services that never take on a material or money expression are included in either case.",
+    "clean_text": "We should not understand that either social or private objective incomes include only material goods, for many utilities and labor services that never take on a material or money expression are included in either case.",
+    "emotion_tags": "[angry=0.7]",
+    "emotions": {
+      "angry": 0.7
+    },
+    "word_count": 35,
+    "char_count": 218,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "6f9437da",
+    "original_text": "[authoritative=0.8] The barricade had been not only repaired, but augmented.",
+    "clean_text": "The barricade had been not only repaired, but augmented.",
+    "emotion_tags": "[authoritative=0.8]",
+    "emotions": {
+      "authoritative": 0.8
+    },
+    "word_count": 9,
+    "char_count": 56,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "b283e9ae",
+    "original_text": "[annoyed=0.8] \"Well, \" said the heavy mayor, speaking slowly and cautiously and eyeing his henchman with quiet scrutiny, \"you want to go pretty easy now, I tell you.\"",
+    "clean_text": "\"Well, \" said the heavy mayor, speaking slowly and cautiously and eyeing his henchman with quiet scrutiny, \"you want to go pretty easy now, I tell you.\"",
+    "emotion_tags": "[annoyed=0.8]",
+    "emotions": {
+      "annoyed": 0.8
+    },
+    "word_count": 27,
+    "char_count": 152,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "f637e5cf",
+    "original_text": "[frustrated=0.7] Pothier seems to think that property, like royalty, exists by divine right.",
+    "clean_text": "Pothier seems to think that property, like royalty, exists by divine right.",
+    "emotion_tags": "[frustrated=0.7]",
+    "emotions": {
+      "frustrated": 0.7
+    },
+    "word_count": 12,
+    "char_count": 75,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "36920081",
+    "original_text": "[overjoyed=0.5] 'The mists were closing again.",
+    "clean_text": "'The mists were closing again.",
+    "emotion_tags": "[overjoyed=0.5]",
+    "emotions": {
+      "overjoyed": 0.5
+    },
+    "word_count": 5,
+    "char_count": 30,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "16197dc0",
+    "original_text": "[disappointed=0.5] But the King's men, who were still following, had heard the noise of the monkeys cheering; and they at last knew where the Doctor was, and hastened on to catch him.",
+    "clean_text": "But the King's men, who were still following, had heard the noise of the monkeys cheering; and they at last knew where the Doctor was, and hastened on to catch him.",
+    "emotion_tags": "[disappointed=0.5]",
+    "emotions": {
+      "disappointed": 0.5
+    },
+    "word_count": 31,
+    "char_count": 164,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "78cf15c7",
+    "original_text": "[happy=0.3] She had done this as she did everything, carefully and with great painstaking, and it was all for her son's sake.",
+    "clean_text": "She had done this as she did everything, carefully and with great painstaking, and it was all for her son's sake.",
+    "emotion_tags": "[happy=0.3]",
+    "emotions": {
+      "happy": 0.3
+    },
+    "word_count": 21,
+    "char_count": 113,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "23b20a9e",
+    "original_text": "[frustrated=0.4] That is because they forget that the Tortoises live on land, have higher back shells, and move very, very slowly. Turtles live more in the water and can move quickly if they will.",
+    "clean_text": "That is because they forget that the Tortoises live on land, have higher back shells, and move very, very slowly. Turtles live more in the water and can move quickly if they will.",
+    "emotion_tags": "[frustrated=0.4]",
+    "emotions": {
+      "frustrated": 0.4
+    },
+    "word_count": 33,
+    "char_count": 179,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "4814d040",
+    "original_text": "[overjoyed=0.6] I did take his life, as I've told you. You are all asking why, and conjecturing about the motive.",
+    "clean_text": "I did take his life, as I've told you. You are all asking why, and conjecturing about the motive.",
+    "emotion_tags": "[overjoyed=0.6]",
+    "emotions": {
+      "overjoyed": 0.6
+    },
+    "word_count": 19,
+    "char_count": 97,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "c9cfbc47",
+    "original_text": "[frustrated=0.7, dramatic=0.8] This they did; and finding evident tokens of the sickness upon both the bodies that were dead, they gave their opinions publicly that they died of the plague.",
+    "clean_text": "[frustrated=0.7, dramatic=0.8] This they did; and finding evident tokens of the sickness upon both the bodies that were dead, they gave their opinions publicly that they died of the plague.",
+    "emotion_tags": "[dramatic=0.8] [frustrated=0.7]",
+    "emotions": {
+      "frustrated": 0.7,
+      "dramatic": 0.8
+    },
+    "word_count": 30,
+    "char_count": 189,
+    "num_emotions": 2,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "c01b8c0a",
+    "original_text": "[overjoyed=0.5] Only its legend remains; and in that legend it is called the Mugen Kane, or Bell of Mugen.",
+    "clean_text": "Only its legend remains; and in that legend it is called the Mugen Kane, or Bell of Mugen.",
+    "emotion_tags": "[overjoyed=0.5]",
+    "emotions": {
+      "overjoyed": 0.5
+    },
+    "word_count": 18,
+    "char_count": 90,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "3db1b932",
+    "original_text": "[deadpan=0.6] Edward, who but rarely heard from Humphrey, was now anxious to quit the army and go to the king, who was in Spain; but to leave his colors, while things were adverse, was impossible.",
+    "clean_text": "Edward, who but rarely heard from Humphrey, was now anxious to quit the army and go to the king, who was in Spain; but to leave his colors, while things were adverse, was impossible.",
+    "emotion_tags": "[deadpan=0.6]",
+    "emotions": {
+      "deadpan": 0.6
+    },
+    "word_count": 34,
+    "char_count": 182,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "4c53cfc1",
+    "original_text": "[playful=0.4] She was suspicious of Anne's big words and dramatic gestures and imagined that the child was making fun of her.",
+    "clean_text": "She was suspicious of Anne's big words and dramatic gestures and imagined that the child was making fun of her.",
+    "emotion_tags": "[playful=0.4]",
+    "emotions": {
+      "playful": 0.4
+    },
+    "word_count": 20,
+    "char_count": 111,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "61284b07",
+    "original_text": "[serious=0.5] The marriage partner who is mature will maintain trust in the other's good intentions in the face of what might seem to be occasions for hurt feelings.",
+    "clean_text": "The marriage partner who is mature will maintain trust in the other's good intentions in the face of what might seem to be occasions for hurt feelings.",
+    "emotion_tags": "[serious=0.5]",
+    "emotions": {
+      "serious": 0.5
+    },
+    "word_count": 27,
+    "char_count": 151,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "a3473df7",
+    "original_text": "[angry=0.5] Undoubtedly the division was never geographically equal; a multitude of rights, some founded in Nature, but wrongly interpreted and still more wrongly applied, inheritance, gift, and exchange; others, like the privileges of birth and position, the illegitimate creations of ignorance and brute force,—all operated to prevent absolute equality.",
+    "clean_text": "Undoubtedly the division was never geographically equal; a multitude of rights, some founded in Nature, but wrongly interpreted and still more wrongly applied, inheritance, gift, and exchange; others, like the privileges of birth and position, the illegitimate creations of ignorance and brute force,—all operated to prevent absolute equality.",
+    "emotion_tags": "[angry=0.5]",
+    "emotions": {
+      "angry": 0.5
+    },
+    "word_count": 48,
+    "char_count": 343,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "286b40a6",
+    "original_text": "[bored=0.7] As for tea or sour cabbage soup, the master and the mistress themselves guzzle that. They make me sleep in the vestibule, and when their brat cries, I don't sleep at all, but have to rock the cradle.",
+    "clean_text": "As for tea or sour cabbage soup, the master and the mistress themselves guzzle that. They make me sleep in the vestibule, and when their brat cries, I don't sleep at all, but have to rock the cradle.",
+    "emotion_tags": "[bored=0.7]",
+    "emotions": {
+      "bored": 0.7
+    },
+    "word_count": 38,
+    "char_count": 199,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "4033dbac",
+    "original_text": "[angry=0.8] Finding that the boat and provisions had been taken and seeing smoke in the bight, he surmised what had happened and came paddling across to the tent.",
+    "clean_text": "Finding that the boat and provisions had been taken and seeing smoke in the bight, he surmised what had happened and came paddling across to the tent.",
+    "emotion_tags": "[angry=0.8]",
+    "emotions": {
+      "angry": 0.8
+    },
+    "word_count": 27,
+    "char_count": 150,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "915b7bf6",
+    "original_text": "[happy=0.4] He has good reasons of some kind or other, or he would not wish us to go.",
+    "clean_text": "He has good reasons of some kind or other, or he would not wish us to go.",
+    "emotion_tags": "[happy=0.4]",
+    "emotions": {
+      "happy": 0.4
+    },
+    "word_count": 17,
+    "char_count": 73,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "83b31931",
+    "original_text": "[curious=0.4] When we had left each other, I thought of the absent Captain in the Navy who was Lady Rachel's husband.",
+    "clean_text": "When we had left each other, I thought of the absent Captain in the Navy who was Lady Rachel's husband.",
+    "emotion_tags": "[curious=0.4]",
+    "emotions": {
+      "curious": 0.4
+    },
+    "word_count": 20,
+    "char_count": 103,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "c186e1e0",
+    "original_text": "[happy=0.4] Almost every great nation has inherited certain questions, either with other nations or with sections of its own people, which it is quite impossible, in the present state of civilization, to decide as matters between private individuals can be decided.",
+    "clean_text": "Almost every great nation has inherited certain questions, either with other nations or with sections of its own people, which it is quite impossible, in the present state of civilization, to decide as matters between private individuals can be decided.",
+    "emotion_tags": "[happy=0.4]",
+    "emotions": {
+      "happy": 0.4
+    },
+    "word_count": 40,
+    "char_count": 253,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "6c2085c4",
+    "original_text": "[heartbroken=0.6] After a visit to his native land-including the European tour-which was also that of his honeymoon-Sir Maurice, swayed by his inclinations, once more returned to Texas, and made Casa del Corvo his permanent home.",
+    "clean_text": "After a visit to his native land-including the European tour-which was also that of his honeymoon-Sir Maurice, swayed by his inclinations, once more returned to Texas, and made Casa del Corvo his permanent home.",
+    "emotion_tags": "[heartbroken=0.6]",
+    "emotions": {
+      "heartbroken": 0.6
+    },
+    "word_count": 34,
+    "char_count": 211,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "6b29397c",
+    "original_text": "[happy=0.3] They at once proceeded to light a fire in the huge fireplace; then they placed a great cauldron of boiling water on it.",
+    "clean_text": "They at once proceeded to light a fire in the huge fireplace; then they placed a great cauldron of boiling water on it.",
+    "emotion_tags": "[happy=0.3]",
+    "emotions": {
+      "happy": 0.3
+    },
+    "word_count": 23,
+    "char_count": 119,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "b765e79e",
+    "original_text": "[excited=0.6] Here we pause.",
+    "clean_text": "Here we pause.",
+    "emotion_tags": "[excited=0.6]",
+    "emotions": {
+      "excited": 0.6
+    },
+    "word_count": 3,
+    "char_count": 14,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "2370c385",
+    "original_text": "[curious=0.4] I have been asked why my race has not produced a Booker Washington. There are many difficulties in the way of efficient race leadership; one of them is the large number of different Indian tribes with their distinct languages, habits, and traditions, and with old tribal jealousies and antagonisms yet to be overcome.",
+    "clean_text": "I have been asked why my race has not produced a Booker Washington. There are many difficulties in the way of efficient race leadership; one of them is the large number of different Indian tribes with their distinct languages, habits, and traditions, and with old tribal jealousies and antagonisms yet to be overcome.",
+    "emotion_tags": "[curious=0.4]",
+    "emotions": {
+      "curious": 0.4
+    },
+    "word_count": 53,
+    "char_count": 317,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "4f9c38aa",
+    "original_text": "[curious=0.5] It was the man who said this, not the collector.",
+    "clean_text": "It was the man who said this, not the collector.",
+    "emotion_tags": "[curious=0.5]",
+    "emotions": {
+      "curious": 0.5
+    },
+    "word_count": 10,
+    "char_count": 48,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "5809b9a6",
+    "original_text": "[disappointed=0.4] She liked Veronica because she was such a steady girl at her needle, and because she would have nothing to say to any one but Dietrich.",
+    "clean_text": "She liked Veronica because she was such a steady girl at her needle, and because she would have nothing to say to any one but Dietrich.",
+    "emotion_tags": "[disappointed=0.4]",
+    "emotions": {
+      "disappointed": 0.4
+    },
+    "word_count": 26,
+    "char_count": 135,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "77056b96",
+    "original_text": "[angry=0.7, authoritative=0.8] My lip was cut and stood out like a snout.",
+    "clean_text": "[angry=0.7, authoritative=0.8] My lip was cut and stood out like a snout.",
+    "emotion_tags": "[angry=0.7] [authoritative=0.8]",
+    "emotions": {
+      "angry": 0.7,
+      "authoritative": 0.8
+    },
+    "word_count": 12,
+    "char_count": 73,
+    "num_emotions": 2,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "fa936cb7",
+    "original_text": "[happy=0.6] As I delivered the blow a low laugh rang out behind me, and, turning, I beheld Tars Tarkas, Sola, and three or four warriors standing in the doorway of the chamber.",
+    "clean_text": "As I delivered the blow a low laugh rang out behind me, and, turning, I beheld Tars Tarkas, Sola, and three or four warriors standing in the doorway of the chamber.",
+    "emotion_tags": "[happy=0.6]",
+    "emotions": {
+      "happy": 0.6
+    },
+    "word_count": 31,
+    "char_count": 164,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "7eebab15",
+    "original_text": "[frustrated=0.7] \"I don't suppose you know, eh?\" queried Logan ironically.",
+    "clean_text": "\"I don't suppose you know, eh?\" queried Logan ironically.",
+    "emotion_tags": "[frustrated=0.7]",
+    "emotions": {
+      "frustrated": 0.7
+    },
+    "word_count": 9,
+    "char_count": 57,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "bb780254",
+    "original_text": "[teasing=0.5] He understood what she was weeping about, but could not in his heart at once agree with her that what he had regarded from childhood as quite an everyday event was wrong.",
+    "clean_text": "He understood what she was weeping about, but could not in his heart at once agree with her that what he had regarded from childhood as quite an everyday event was wrong.",
+    "emotion_tags": "[teasing=0.5]",
+    "emotions": {
+      "teasing": 0.5
+    },
+    "word_count": 32,
+    "char_count": 170,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "b43a192a",
+    "original_text": "[sarcasm=0.5] He had politely tried to tell me to clear the way, which I certainly had done with all speed. Picking myself out of the hedge I walked beside him, examining his clumsy feet and peering up at his small, intelligent eye.",
+    "clean_text": "He had politely tried to tell me to clear the way, which I certainly had done with all speed. Picking myself out of the hedge I walked beside him, examining his clumsy feet and peering up at his small, intelligent eye.",
+    "emotion_tags": "[sarcasm=0.5]",
+    "emotions": {
+      "sarcasm": 0.5
+    },
+    "word_count": 41,
+    "char_count": 218,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "3d6c65e2",
+    "original_text": "[curious=0.6] \"Runs a bit light at the loins, to my way of thinking'.\"",
+    "clean_text": "\"Runs a bit light at the loins, to my way of thinking'.\"",
+    "emotion_tags": "[curious=0.6]",
+    "emotions": {
+      "curious": 0.6
+    },
+    "word_count": 12,
+    "char_count": 56,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  },
+  {
+    "id": "98c4e39f",
+    "original_text": "[annoyed=0.5] How long the nerves of Heyward would have sustained him in this extraordinary situation, it might be difficult to decide, for, happily, he soon found relief.",
+    "clean_text": "How long the nerves of Heyward would have sustained him in this extraordinary situation, it might be difficult to decide, for, happily, he soon found relief.",
+    "emotion_tags": "[annoyed=0.5]",
+    "emotions": {
+      "annoyed": 0.5
+    },
+    "word_count": 26,
+    "char_count": 157,
+    "num_emotions": 1,
+    "flag_reason": "no_rule_matched"
+  }
+]

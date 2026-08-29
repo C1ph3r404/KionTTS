@@ -1,0 +1,47 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+.ipynb_checkpoints/
+
+# Virtual Environment
+.venv/
+env/
+venv/
+ENV/
+
+# Large Datasets & Archives
+*.zip
+*.tar.gz
+*.7z
+DatasetGeneration/data/
+DatasetGeneration/EmotionRefs/voices/*.wav
+DatasetGeneration/EmotionRefs/voices/*.zip
+DatasetGeneration/hf_cache_temp/
+DatasetGeneration/hf_upload_staging/
+DatasetGeneration/processing_temp/
+DatasetGeneration/KionTTS_Dataset_v3.zip
+DatasetGeneration/SentenceBank/LibriTTS-Dataset/
+
+# Audio Files & Generated Samples
+*.wav
+*.mp3
+*.flac
+*.ogg
+eval_samples/
+
+# Model Checkpoints & Precomputed Features
+*.pt
+*.pth
+*.ckpt
+*.bin
+*.onnx
+*.safetensors
+checkpoints/
+preprocessed_data/
+dataset/
+
+# Logs & Temporary files
+*.log
+tmp/
+.DS_Store

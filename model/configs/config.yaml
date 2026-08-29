@@ -1,0 +1,45 @@
+# KionTTS Model Configuration
+
+audio:
+  sample_rate: 24000
+  n_fft: 1024
+  hop_length: 256
+  win_length: 1024
+  n_mels: 80
+  f_min: 0.0
+  f_max: 8000.0
+
+model:
+  vocab_size: 256
+  hidden_dim: 256
+  latent_style_dim: 128
+  tag_embed_dim: 64
+  num_emotions: 14
+  num_styles: 10
+  encoder_layers: 4
+  encoder_heads: 4
+  decoder_hidden_dim: 512
+  decoder_layers: 4
+
+training:
+  batch_size: 24
+  prototype_batch_size: 16
+  lr: 2.0e-4
+  weight_decay: 0.01
+  epochs: 100
+  prototype_epochs: 20
+  save_step_interval: 500
+  eval_step_interval: 250
+  keep_last_n_checkpoints: 3
+
+loss_weights:
+  mel_weight: 1.0
+  mel_linear_weight: 0.5
+  duration_weight: 0.5
+  pitch_weight: 0.2
+  energy_weight: 0.2
+
+paths:
+  drive_checkpoint_dir: "/content/drive/MyDrive/KionTTS_Checkpoints"
+  dataset_dir: "/content/dataset"
+  preprocessed_dir: "/content/preprocessed_data"

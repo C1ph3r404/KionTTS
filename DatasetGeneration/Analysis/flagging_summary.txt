@@ -1,0 +1,15 @@
+=== KionTTS Flag Summary ===
+
+Total scanned (excl. known-bad): 18773
+
+Tier 1 — Auto-regenerate (high-risk): 3323 (17.7%)
+  Breakdown:
+    single_high_risk: 2975
+    multi_with_trigger: 312
+    long_expressive: 36
+
+Tier 2 — Spot-check (medium-risk):    933 (5.0%)
+  Breakdown:
+    medium_risk: 933
+
+Tier 3 — Considered clean:            14517 (77.3%)
