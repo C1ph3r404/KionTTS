@@ -87,10 +87,10 @@ def build_kion_config(
         "load_only_params":      False,
 
         # ── Pretrained Utility Models ─────────────────────────────────────
-        "F0_path":      "Utils/JDC/bst.t7",
-        "ASR_config":   "Utils/ASR/config.yml",
-        "ASR_path":     "Utils/ASR/epoch_00080.pth",
-        "PLBERT_dir":   "Utils/PLBERT/",
+        "F0_path":      f"{STYLETTS2_ROOT}/Utils/JDC/bst.t7",
+        "ASR_config":   f"{STYLETTS2_ROOT}/Utils/ASR/config.yml",
+        "ASR_path":     f"{STYLETTS2_ROOT}/Utils/ASR/epoch_00080.pth",
+        "PLBERT_dir":   f"{STYLETTS2_ROOT}/Utils/PLBERT/",
 
         # ── Data Paths ────────────────────────────────────────────────────
         "data_params": {

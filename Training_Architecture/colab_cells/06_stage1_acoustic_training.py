@@ -140,6 +140,36 @@ def _find_latest_drive_checkpoint() -> str | None:
     return ckpts[-1] if ckpts else None
 
 
+def _resolve_config_paths(cfg, base_dir=STYLETTS2_ROOT):
+    """Ensure relative paths to pretrained utility models resolve to STYLETTS2_ROOT or REPO_ROOT."""
+    def _resolve(p):
+        if not p or not isinstance(p, str):
+            return p
+        if os.path.isabs(p) and os.path.exists(p):
+            return p
+        if os.path.exists(p):
+            return os.path.abspath(p)
+        for root in [base_dir, REPO_ROOT, "/content/KionTTS/StyleTTS2", "/content/Kiontts/StyleTTS2", "/content/kiontts/StyleTTS2"]:
+            cand = os.path.normpath(os.path.join(root, p))
+            if os.path.exists(cand):
+                return cand
+        return p
+
+    for key in ["ASR_config", "ASR_path", "F0_path", "PLBERT_dir", "pretrained_model"]:
+        if key in cfg and cfg[key]:
+            resolved = _resolve(cfg[key])
+            if resolved != cfg[key]:
+                print(f"[*] Resolved {key}: '{cfg[key]}' -> '{resolved}'")
+            cfg[key] = resolved
+
+    if "data_params" in cfg and isinstance(cfg["data_params"], dict):
+        dp = cfg["data_params"]
+        for dkey in ["train_data", "val_data", "OOD_data"]:
+            if dkey in dp and dp[dkey]:
+                dp[dkey] = _resolve(dp[dkey])
+    return cfg
+
+
 # ─── Main Training Function ───────────────────────────────────────────────────
 def run_stage1_training(config_path: str = CONFIG_PATH):
     print("=" * 65)
@@ -148,6 +178,7 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
 
     # 1. Load config
     config = yaml.safe_load(open(config_path))
+    config = _resolve_config_paths(config)
     log_dir = config["log_dir"]
     os.makedirs(log_dir, exist_ok=True)
     shutil.copy(config_path, os.path.join(log_dir, os.path.basename(config_path)))

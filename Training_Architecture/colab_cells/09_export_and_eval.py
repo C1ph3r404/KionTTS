@@ -200,7 +200,28 @@ def export_frozen_config(config: dict, output_dir: str):
     print(f"  [✓] Config saved: {out_path}")
 
 
-# ─── Main ──────────────────────────────────────────────────────────────────────
+def _resolve_config_paths(cfg, base_dir=STYLETTS2_ROOT):
+    """Ensure relative paths to pretrained utility models resolve to STYLETTS2_ROOT or REPO_ROOT."""
+    def _resolve(p):
+        if not p or not isinstance(p, str):
+            return p
+        if os.path.isabs(p) and os.path.exists(p):
+            return p
+        if os.path.exists(p):
+            return os.path.abspath(p)
+        for root in [base_dir, REPO_ROOT, "/content/KionTTS/StyleTTS2", "/content/Kiontts/StyleTTS2", "/content/kiontts/StyleTTS2"]:
+            cand = os.path.normpath(os.path.join(root, p))
+            if os.path.exists(cand):
+                return cand
+        return p
+
+    for key in ["ASR_config", "ASR_path", "F0_path", "PLBERT_dir", "pretrained_model"]:
+        if key in cfg and cfg[key]:
+            cfg[key] = _resolve(cfg[key])
+    return cfg
+
+
+# ─── Main Pipeline ────────────────────────────────────────────────────────────
 def run_export_and_eval():
     print("=" * 65)
     print("KionTTS — Stage: Export & Quality Evaluation")
@@ -211,6 +232,7 @@ def run_export_and_eval():
 
     # Load config & model
     config = yaml.safe_load(open(CONFIG_PATH))
+    config = _resolve_config_paths(config)
     model_params = recursive_munch(config["model_params"])
 
     text_aligner    = load_ASR_models(config["ASR_path"], config["ASR_config"]).to(device)

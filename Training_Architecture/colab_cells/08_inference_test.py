@@ -62,10 +62,32 @@ from model.data.phonemizer_util import phonemize_text
 SAMPLE_RATE = 24000
 
 
+def _resolve_config_paths(cfg, base_dir=STYLETTS2_ROOT):
+    """Ensure relative paths to pretrained utility models resolve to STYLETTS2_ROOT or REPO_ROOT."""
+    def _resolve(p):
+        if not p or not isinstance(p, str):
+            return p
+        if os.path.isabs(p) and os.path.exists(p):
+            return p
+        if os.path.exists(p):
+            return os.path.abspath(p)
+        for root in [base_dir, REPO_ROOT, "/content/KionTTS/StyleTTS2", "/content/Kiontts/StyleTTS2", "/content/kiontts/StyleTTS2"]:
+            cand = os.path.normpath(os.path.join(root, p))
+            if os.path.exists(cand):
+                return cand
+        return p
+
+    for key in ["ASR_config", "ASR_path", "F0_path", "PLBERT_dir", "pretrained_model"]:
+        if key in cfg and cfg[key]:
+            cfg[key] = _resolve(cfg[key])
+    return cfg
+
+
 # ─── Load Model ───────────────────────────────────────────────────────────────
 def load_kion_model(config_path: str, checkpoint_path: str, device: torch.device):
     """Load KionStyleTTS2 from a Stage 2 checkpoint."""
     config = yaml.safe_load(open(config_path))
+    config = _resolve_config_paths(config)
     model_params = recursive_munch(config["model_params"])
 
     text_aligner    = load_ASR_models(config["ASR_path"], config["ASR_config"]).to(device)
