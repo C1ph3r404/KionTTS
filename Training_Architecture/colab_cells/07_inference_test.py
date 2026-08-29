@@ -1,13 +1,14 @@
 """
 Colab Cell 07: Interactive Inference & Expressiveness Testing
 Loads trained KionTTS model from Google Drive, synthesizes tagged text prompts
-(e.g., [sarcastic=0.8], blends [happy=0.7,playful=0.6]), and generates audio outputs.
+(e.g., [sarcastic=0.8], blends [happy=0.7,playful=0.6]), and generates high-fidelity audio outputs.
 """
 
 import os
 import sys
 import torch
-import librosa
+import torchaudio
+import torchaudio.transforms as T
 import soundfile as sf
 import numpy as np
 import matplotlib.pyplot as plt
@@ -35,26 +36,47 @@ class KionSynthesizer:
             state = torch.load(checkpoint_path, map_location=self.device)
             state_dict = state.get("model_state_dict", state)
             self.model.load_state_dict(state_dict)
-            print("[+] Checkpoint loaded successfully!")
+            val_loss = state.get("best_val_loss", state.get("val_loss", None))
+            step = state.get("step", None)
+            print(f"[+] Checkpoint loaded successfully! (Step: {step}, Val Loss: {val_loss})")
         else:
             print(f"[-] Warning: Checkpoint not found at {checkpoint_path}. Using uninitialized model.")
 
         self.model.eval()
 
-    def mel_to_audio_griffin_lim(self, mel_spec: np.ndarray, sr: int = 24000) -> np.ndarray:
-        """Inverts log-Mel spectrogram back to waveform via Griffin-Lim."""
-        # Convert log Mel back to linear
-        mel_linear = np.exp(mel_spec)
-        # Approximate linear spectrogram from Mel
-        inv_mel_basis = np.linalg.pinv(
-            librosa.filters.mel(sr=sr, n_fft=1024, n_mels=80, fmin=0.0, fmax=8000.0)
-        )
-        spec = np.dot(inv_mel_basis, mel_linear)
-        spec = np.maximum(spec, 0)
-        # Griffin-Lim reconstruction
-        wav = librosa.griffinlim(spec, n_iter=60, hop_length=256, win_length=1024)
-        # Normalize
-        wav = wav / (np.max(np.abs(wav)) + 1e-6)
+        # Torchaudio Exact Inverse Mel Transform & Griffin-Lim (matches extraction filterbank exactly)
+        self.inv_mel = T.InverseMelScale(
+            n_stft=1024 // 2 + 1,
+            n_mels=80,
+            sample_rate=24000,
+            f_min=0.0,
+            f_max=8000.0,
+            norm="slaney",
+            mel_scale="htk",
+        ).to(self.device)
+
+        self.griffin_lim = T.GriffinLim(
+            n_fft=1024,
+            win_length=1024,
+            hop_length=256,
+            n_iter=60,
+            power=1.0,
+        ).to(self.device)
+
+    def mel_to_audio(self, mel_tensor: torch.Tensor) -> np.ndarray:
+        """Inverts log-Mel spectrogram tensor (1, 80, T) directly on GPU into audio waveform."""
+        # Un-log to linear Mel
+        linear_mel = torch.exp(mel_tensor)
+        # Invert to STFT magnitude spectrogram using identical torchaudio basis
+        spec = self.inv_mel(linear_mel)
+        spec = torch.clamp(spec, min=0.0)
+        # Griffin-Lim phase reconstruction
+        wav = self.griffin_lim(spec)
+        wav = wav.squeeze().cpu().numpy()
+        # Normalize amplitude
+        max_val = np.max(np.abs(wav)) + 1e-6
+        if max_val > 0:
+            wav = wav / max_val * 0.95
         return wav
 
     def synthesize(
@@ -62,7 +84,7 @@ class KionSynthesizer:
         tagged_text: str,
         output_wav: Optional[str] = None,
         pace: float = 1.0,
-        plot: bool = False,
+        plot: bool = True,
     ) -> np.ndarray:
         """
         Synthesizes speech from tagged text.
@@ -81,14 +103,18 @@ class KionSynthesizer:
 
         with torch.no_grad():
             outputs = self.model.inference(token_tensor, style_tensor, pace=pace)
-            mel = outputs["mel"][0].cpu().numpy()  # (80, T)
+            mel = outputs["mel"]  # (1, 80, T_frames)
+            pred_dur = outputs["pred_durations"][0].cpu().numpy()
 
-        wav = self.mel_to_audio_griffin_lim(mel)
+        wav = self.mel_to_audio(mel)
 
-        print(f"\nPrompt: '{tagged_text}'")
+        print(f"\n{'='*55}")
+        print(f"Prompt:     '{tagged_text}'")
         print(f"Clean Text: '{clean_text}'")
-        print(f"Emotions: {emotions} | Styles: {styles}")
-        print(f"Synthesized duration: {len(wav) / 24000:.2f} seconds ({mel.shape[1]} frames)")
+        print(f"Emotions:   {emotions} | Styles: {styles}")
+        print(f"Tokens:     {len(tokens)} phonemes | Frames: {mel.shape[-1]}")
+        print(f"Duration:   {len(wav) / 24000:.2f}s ({len(wav)} samples)")
+        print(f"{'='*55}")
 
         if output_wav:
             os.makedirs(os.path.dirname(os.path.abspath(output_wav)), exist_ok=True)
@@ -96,21 +122,26 @@ class KionSynthesizer:
             print(f"[+] Audio saved to: {output_wav}")
 
         if plot:
-            plt.figure(figsize=(10, 4))
-            plt.imshow(mel, aspect="auto", origin="lower", cmap="viridis")
-            plt.colorbar(format="%+2.0f dB")
-            plt.title(f"Synthesized Mel: {tagged_text}")
-            plt.tight_layout()
-            plt.show()
+            try:
+                mel_np = mel[0].cpu().numpy()
+                plt.figure(figsize=(10, 3.5))
+                plt.imshow(mel_np, aspect="auto", origin="lower", cmap="magma")
+                plt.colorbar(format="%+2.0f dB")
+                plt.title(f"Synthesized Spectrogram: {tagged_text[:40]}...")
+                plt.xlabel("Acoustic Frames")
+                plt.ylabel("Mel Bins (80)")
+                plt.tight_layout()
+                plt.show()
+            except Exception:
+                pass
 
         return wav
 
 
 def run_interactive_suite():
-    # Attempt to load best model or fallback
     ckpt = "/content/drive/MyDrive/KionTTS_Checkpoints/best_model.pt"
     if not os.path.exists(ckpt):
-        ckpt = "/content/drive/MyDrive/KionTTS_Checkpoints/prototype_kion.pt"
+        ckpt = "/content/drive/MyDrive/KionTTS_Checkpoints/latest_checkpoint.pt"
 
     synth = KionSynthesizer(checkpoint_path=ckpt)
 
