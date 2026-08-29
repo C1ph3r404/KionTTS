@@ -146,27 +146,50 @@ kion_style_consistency = KionStyleConsistencyLoss()
 
 
 # ─── Checkpoint Helpers ───────────────────────────────────────────────────────
-def _save_to_drive(state: dict, epoch: int, is_best: bool = False, stage: str = "stage2"):
+# ─── Checkpoint Helpers ───────────────────────────────────────────────────────
+def _save_to_drive(state: dict, epoch: int, step: int = None, is_best: bool = False, stage: str = "stage2"):
     import glob
     os.makedirs(DRIVE_CKPT_DIR, exist_ok=True)
-    ckpt_path = os.path.join(DRIVE_CKPT_DIR, f"kion_{stage}_epoch_{epoch:04d}.pth")
-    torch.save(state, ckpt_path)
-    print(f"  [✓] Saved {stage} checkpoint → {ckpt_path}")
+    if step is not None:
+        ckpt_path = os.path.join(DRIVE_CKPT_DIR, f"kion_{stage}_step_{step:07d}.pth")
+        torch.save(state, ckpt_path)
+        print(f"\n  [✓] Checkpoint saved at step {step} → {ckpt_path}")
+        all_step_ckpts = sorted(glob.glob(os.path.join(DRIVE_CKPT_DIR, f"kion_{stage}_step_*.pth")))
+        while len(all_step_ckpts) > 3:
+            try:
+                os.remove(all_step_ckpts.pop(0))
+            except OSError:
+                pass
+    else:
+        ckpt_path = os.path.join(DRIVE_CKPT_DIR, f"kion_{stage}_epoch_{epoch:04d}.pth")
+        torch.save(state, ckpt_path)
+        print(f"\n  [✓] Saved {stage} epoch checkpoint → {ckpt_path}")
+        all_epoch_ckpts = sorted(glob.glob(os.path.join(DRIVE_CKPT_DIR, f"kion_{stage}_epoch_*.pth")))
+        while len(all_epoch_ckpts) > 3:
+            try:
+                os.remove(all_epoch_ckpts.pop(0))
+            except OSError:
+                pass
+
     if is_best:
         best_path = os.path.join(DRIVE_CKPT_DIR, f"kion_{stage}_best.pth")
         shutil.copy2(ckpt_path, best_path)
         print(f"  [★] New best! → {best_path}")
-    # Prune old checkpoints
-    all_ckpts = sorted(glob.glob(os.path.join(DRIVE_CKPT_DIR, f"kion_{stage}_epoch_*.pth")))
-    while len(all_ckpts) > 3:
-        os.remove(all_ckpts.pop(0))
 
 
 def _find_latest_stage2_checkpoint() -> str | None:
     import glob
-    pattern = os.path.join(DRIVE_CKPT_DIR, "kion_stage2_epoch_*.pth")
-    ckpts   = sorted(glob.glob(pattern))
-    return ckpts[-1] if ckpts else None
+    step_ckpts = sorted(glob.glob(os.path.join(DRIVE_CKPT_DIR, "kion_stage2_step_*.pth")))
+    epoch_ckpts = sorted(glob.glob(os.path.join(DRIVE_CKPT_DIR, "kion_stage2_epoch_*.pth")))
+    if step_ckpts and epoch_ckpts:
+        latest_step = step_ckpts[-1]
+        latest_epoch = epoch_ckpts[-1]
+        return latest_step if os.path.getmtime(latest_step) >= os.path.getmtime(latest_epoch) else latest_epoch
+    elif step_ckpts:
+        return step_ckpts[-1]
+    elif epoch_ckpts:
+        return epoch_ckpts[-1]
+    return None
 
 
 def _load_stage1_checkpoint() -> str:
@@ -175,6 +198,10 @@ def _load_stage1_checkpoint() -> str:
         return STAGE1_BEST
     if os.path.exists(STAGE1_FINAL):
         return STAGE1_FINAL
+    import glob
+    candidates = sorted(glob.glob(os.path.join(DRIVE_CKPT_DIR, "kion_stage1_*.pth")), key=os.path.getmtime)
+    if candidates:
+        return candidates[-1]
     raise FileNotFoundError(
         "No Stage 1 checkpoint found. Run Cell 06 first.\n"
         f"Expected: {STAGE1_BEST} or {STAGE1_FINAL}"
@@ -433,6 +460,10 @@ def run_stage2_training(config_path: str = CONFIG_PATH):
         pbar = tqdm(train_dataloader, desc=f"Epoch {epoch+1:03d}/{epochs} [Stage 2]", leave=False)
 
         for i, batch in enumerate(pbar):
+            # Skip batches already processed if resuming mid-epoch
+            if epoch == start_epoch and iters > 0 and i < (iters % len(train_dataloader)):
+                continue
+
             waves = batch[0]
             batch = [b.to(device) for b in batch[1:]]
             texts, input_lengths, ref_texts, ref_lengths, mels, mel_input_length, _ = batch
@@ -571,6 +602,17 @@ def run_stage2_training(config_path: str = CONFIG_PATH):
                     F0=f"{loss_F0.item():.4f}",
                     diff=f"{loss_diff.item():.4f}" if epoch >= diff_epoch else "—",
                 )
+
+                # ── Checkpoint every 100 steps ──
+                if iters % 100 == 0:
+                    state = {
+                        "net":       {k: model[k].state_dict() for k in model},
+                        "optimizer": optimizer.state_dict(),
+                        "iters":     iters,
+                        "val_loss":  loss_mel.item(),
+                        "epoch":     epoch,
+                    }
+                    _save_to_drive(state, epoch=epoch + 1, step=iters, stage="stage2")
 
                 # TensorBoard
                 if (i + 1) % 20 == 0:

@@ -133,27 +133,52 @@ log.addHandler(_h)
 
 
 # ─── Checkpoint helpers ───────────────────────────────────────────────────────
-def _save_to_drive(state: dict, epoch: int, is_best: bool = False):
+def _save_to_drive(state: dict, epoch: int, step: int = None, is_best: bool = False):
     os.makedirs(DRIVE_CKPT_DIR, exist_ok=True)
-    ckpt_path = os.path.join(DRIVE_CKPT_DIR, f"kion_stage1_epoch_{epoch:04d}.pth")
-    torch.save(state, ckpt_path)
-    print(f"  [✓] Saved Stage 1 checkpoint → {ckpt_path}")
+    if step is not None:
+        ckpt_path = os.path.join(DRIVE_CKPT_DIR, f"kion_stage1_step_{step:07d}.pth")
+        torch.save(state, ckpt_path)
+        print(f"\n  [✓] Checkpoint saved at step {step} → {ckpt_path}")
+        # Keep only last 3 step checkpoints to save Drive space
+        import glob
+        all_step_ckpts = sorted(glob.glob(os.path.join(DRIVE_CKPT_DIR, "kion_stage1_step_*.pth")))
+        while len(all_step_ckpts) > 3:
+            try:
+                os.remove(all_step_ckpts.pop(0))
+            except OSError:
+                pass
+    else:
+        ckpt_path = os.path.join(DRIVE_CKPT_DIR, f"kion_stage1_epoch_{epoch:04d}.pth")
+        torch.save(state, ckpt_path)
+        print(f"\n  [✓] Saved Stage 1 epoch checkpoint → {ckpt_path}")
+        # Keep only last 3 epoch checkpoints to save Drive space
+        import glob
+        all_epoch_ckpts = sorted(glob.glob(os.path.join(DRIVE_CKPT_DIR, "kion_stage1_epoch_*.pth")))
+        while len(all_epoch_ckpts) > 3:
+            try:
+                os.remove(all_epoch_ckpts.pop(0))
+            except OSError:
+                pass
+
     if is_best:
         best_path = os.path.join(DRIVE_CKPT_DIR, "kion_stage1_best.pth")
         shutil.copy2(ckpt_path, best_path)
         print(f"  [★] New best! Copied → {best_path}")
-    # Keep only last 3 epoch checkpoints to save Drive space
-    import glob
-    all_ckpts = sorted(glob.glob(os.path.join(DRIVE_CKPT_DIR, "kion_stage1_epoch_*.pth")))
-    while len(all_ckpts) > 3:
-        os.remove(all_ckpts.pop(0))
 
 
 def _find_latest_drive_checkpoint() -> str | None:
     import glob
-    pattern = os.path.join(DRIVE_CKPT_DIR, "kion_stage1_epoch_*.pth")
-    ckpts = sorted(glob.glob(pattern))
-    return ckpts[-1] if ckpts else None
+    step_ckpts = sorted(glob.glob(os.path.join(DRIVE_CKPT_DIR, "kion_stage1_step_*.pth")))
+    epoch_ckpts = sorted(glob.glob(os.path.join(DRIVE_CKPT_DIR, "kion_stage1_epoch_*.pth")))
+    if step_ckpts and epoch_ckpts:
+        latest_step = step_ckpts[-1]
+        latest_epoch = epoch_ckpts[-1]
+        return latest_step if os.path.getmtime(latest_step) >= os.path.getmtime(latest_epoch) else latest_epoch
+    elif step_ckpts:
+        return step_ckpts[-1]
+    elif epoch_ckpts:
+        return epoch_ckpts[-1]
+    return None
 
 
 def _resolve_config_paths(cfg, base_dir=STYLETTS2_ROOT):
@@ -438,6 +463,10 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
         )
 
         for i, batch in enumerate(pbar):
+            # Skip batches already processed if resuming mid-epoch
+            if epoch == start_epoch and iters > 0 and i < (iters % len(train_dataloader)):
+                continue
+
             waves = batch[0]
             batch = [b.to(device) for b in batch[1:]]
             texts, input_lengths, _, _, mels, mel_input_length, _ = batch
@@ -564,6 +593,17 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
                 mel=f"{_to_num(loss_mel):.4f}",
                 gen=f"{_to_num(loss_gen_all):.4f}",
             )
+
+            # ── Checkpoint every 100 steps ──
+            if iters % 100 == 0 and accelerator.is_main_process:
+                state = {
+                    "net":       {k: model[k].state_dict() for k in model},
+                    "optimizer": optimizer.state_dict(),
+                    "iters":     iters,
+                    "val_loss":  running_loss / max((i % log_interval) + 1, 1),
+                    "epoch":     epoch,
+                }
+                _save_to_drive(state, epoch=epoch + 1, step=iters)
 
             if (i + 1) % log_interval == 0 and accelerator.is_main_process:
                 avg = running_loss / log_interval
