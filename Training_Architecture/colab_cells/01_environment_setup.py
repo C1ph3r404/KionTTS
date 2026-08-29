@@ -64,26 +64,15 @@ def install_dependencies():
     cmd_pip = f"{sys.executable} -m pip install -q " + " ".join(packages)
     subprocess.run(cmd_pip, shell=True, check=True)
 
-    # Build monotonic_align Cython extension (required by StyleTTS2 maximum_path)
-    import subprocess as _sp
-    import os as _os
-    repo_root = _os.path.abspath(_os.path.join(_os.path.dirname(__file__), "../.."))
-    styletts2_root = _os.path.join(repo_root, "StyleTTS2")
-    if not _os.path.exists(styletts2_root):
-        # Try common Colab paths
-        for _p in ["/content/KionTTS/StyleTTS2", "/content/Kiontts/StyleTTS2", "/content/kiontts/StyleTTS2"]:
-            if _os.path.exists(_p):
-                styletts2_root = _p
-                break
-    monotonic_src = _os.path.join(styletts2_root, "monotonic_align")
-    if _os.path.isdir(monotonic_src):
-        _sp.run(
-            f"cd {monotonic_src} && python setup.py build_ext --inplace -q",
-            shell=True, check=False,
-        )
-        print(f"[+] monotonic_align Cython extension built from: {monotonic_src}")
-    else:
-        print(f"[!] monotonic_align source not found at {monotonic_src} — skipping build.")
+    # Install monotonic_align (Cython alignment extension required by StyleTTS2)
+    try:
+        import monotonic_align
+        print("[+] monotonic_align is already installed.")
+    except ImportError:
+        print("[*] Compiling & installing monotonic_align from git (requires cython)...")
+        cmd_mono = f"{sys.executable} -m pip install -q git+https://github.com/resemble-ai/monotonic_align.git"
+        subprocess.run(cmd_mono, shell=True, check=True)
+        print("[+] monotonic_align installed successfully!")
     print("Dependencies installed successfully!")
 
 

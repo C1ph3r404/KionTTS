@@ -60,7 +60,7 @@ for p in [REPO_ROOT, STYLETTS2_ROOT]:
 
 
 # ─── Ensure Dependencies (self-healing for active Colab runtimes) ────────────
-for _pkg, _mod in [("munch", "munch"), ("einops-exts", "einops_exts"), ("einops", "einops"), ("pydub", "pydub")]:
+for _pkg, _mod in [("munch", "munch"), ("einops-exts", "einops_exts"), ("einops", "einops"), ("pydub", "pydub"), ("nltk", "nltk")]:
     try:
         __import__(_mod)
     except ImportError:
@@ -68,11 +68,24 @@ for _pkg, _mod in [("munch", "munch"), ("einops-exts", "einops_exts"), ("einops"
         print(f"[*] Installing missing package: {_pkg}...")
         subprocess.run([sys.executable, "-m", "pip", "install", "-q", _pkg], check=False)
 
+try:
+    import monotonic_align
+except ImportError:
+    import subprocess
+    print("[*] Installing missing package: monotonic_align from git...")
+    subprocess.run([sys.executable, "-m", "pip", "install", "-q", "cython"], check=False)
+    subprocess.run([sys.executable, "-m", "pip", "install", "-q", "git+https://github.com/resemble-ai/monotonic_align.git"], check=False)
+
 # ─── Imports ──────────────────────────────────────────────────────────────────
 import yaml
 from munch import Munch
 
-from models import build_model
+from models import (
+    build_model,
+    load_ASR_models,
+    load_F0_models,
+    load_checkpoint,
+)
 from meldataset import build_dataloader
 from losses import (
     MultiResolutionSTFTLoss,
@@ -82,9 +95,6 @@ from losses import (
 )
 from utils import (
     get_data_path_list,
-    load_ASR_models,
-    load_F0_models,
-    load_checkpoint,
     length_to_mask,
     log_norm,
     recursive_munch,

@@ -44,8 +44,8 @@ for p in [REPO_ROOT, STYLETTS2_ROOT]:
 
 import yaml
 from munch import Munch
-from models import build_model
-from utils import load_ASR_models, load_F0_models, load_checkpoint, recursive_munch
+from models import build_model, load_ASR_models, load_F0_models, load_checkpoint
+from utils import recursive_munch
 from Utils.PLBERT.util import load_plbert
 
 from model.models.kion_styletts2 import KionStyleTTS2
