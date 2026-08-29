@@ -515,7 +515,6 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
             if epoch >= TMA_epoch:
                 optimizer.step("text_aligner")
                 optimizer.step("pitch_extractor")
-            optimizer.step("kion_style_adapter")  # always train adapter
 
             iters += 1
             pbar.set_postfix(

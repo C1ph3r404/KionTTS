@@ -32,11 +32,15 @@ class MultiOptimizer:
         _ = [self._step(key, scaler) for key in keys]
 
     def _step(self, key, scaler=None):
-        if scaler is not None:
-            scaler.step(self.optimizers[key])
-            scaler.update()
-        else:
-            self.optimizers[key].step()
+        try:
+            if scaler is not None:
+                scaler.step(self.optimizers[key])
+                scaler.update()
+            else:
+                self.optimizers[key].step()
+        except AssertionError as e:
+            if "No inf checks were recorded" not in str(e):
+                raise
 
     def zero_grad(self, key=None):
         if key is not None:
