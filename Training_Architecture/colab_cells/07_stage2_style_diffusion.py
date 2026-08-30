@@ -146,30 +146,28 @@ kion_style_consistency = KionStyleConsistencyLoss()
 
 
 # ─── Checkpoint Helpers ───────────────────────────────────────────────────────
-# ─── Checkpoint Helpers ───────────────────────────────────────────────────────
 def _save_to_drive(state: dict, epoch: int, step: int = None, is_best: bool = False, stage: str = "stage2"):
-    import glob
     os.makedirs(DRIVE_CKPT_DIR, exist_ok=True)
     if step is not None:
-        ckpt_path = os.path.join(DRIVE_CKPT_DIR, f"kion_{stage}_step_{step:07d}.pth")
+        # Fixed rolling slots A & B (overwritten in-place, zero files deleted into Drive Trash!)
+        slot = "A" if (step // 1000) % 2 == 0 else "B"
+        ckpt_path = os.path.join(DRIVE_CKPT_DIR, f"kion_{stage}_step_slot_{slot}.pth")
         torch.save(state, ckpt_path)
-        print(f"\n  [✓] Checkpoint saved at step {step} → {ckpt_path}")
-        all_step_ckpts = sorted(glob.glob(os.path.join(DRIVE_CKPT_DIR, f"kion_{stage}_step_*.pth")))
-        while len(all_step_ckpts) > 3:
-            try:
-                os.remove(all_step_ckpts.pop(0))
-            except OSError:
-                pass
+        print(f"\n  [✓] Checkpoint saved at step {step} (Slot {slot}) → {ckpt_path}")
     else:
-        ckpt_path = os.path.join(DRIVE_CKPT_DIR, f"kion_{stage}_epoch_{epoch:04d}.pth")
+        # Fixed rolling slots A & B for epochs (overwritten in-place)
+        slot = "A" if epoch % 2 == 0 else "B"
+        ckpt_path = os.path.join(DRIVE_CKPT_DIR, f"kion_{stage}_epoch_slot_{slot}.pth")
         torch.save(state, ckpt_path)
-        print(f"\n  [✓] Saved {stage} epoch checkpoint → {ckpt_path}")
-        all_epoch_ckpts = sorted(glob.glob(os.path.join(DRIVE_CKPT_DIR, f"kion_{stage}_epoch_*.pth")))
-        while len(all_epoch_ckpts) > 3:
-            try:
-                os.remove(all_epoch_ckpts.pop(0))
-            except OSError:
-                pass
+        print(f"\n  [✓] Saved {stage} epoch checkpoint (Epoch {epoch}, Slot {slot}) → {ckpt_path}")
+
+    # Track latest checkpoint path in a lightweight pointer file
+    meta_path = os.path.join(DRIVE_CKPT_DIR, f"latest_{stage}_checkpoint.txt")
+    try:
+        with open(meta_path, "w") as f:
+            f.write(f"{ckpt_path}\n")
+    except Exception:
+        pass
 
     if is_best:
         best_path = os.path.join(DRIVE_CKPT_DIR, f"kion_{stage}_best.pth")
@@ -179,16 +177,36 @@ def _save_to_drive(state: dict, epoch: int, step: int = None, is_best: bool = Fa
 
 def _find_latest_stage2_checkpoint() -> str | None:
     import glob
-    step_ckpts = sorted(glob.glob(os.path.join(DRIVE_CKPT_DIR, "kion_stage2_step_*.pth")))
-    epoch_ckpts = sorted(glob.glob(os.path.join(DRIVE_CKPT_DIR, "kion_stage2_epoch_*.pth")))
-    if step_ckpts and epoch_ckpts:
-        latest_step = step_ckpts[-1]
-        latest_epoch = epoch_ckpts[-1]
-        return latest_step if os.path.getmtime(latest_step) >= os.path.getmtime(latest_epoch) else latest_epoch
-    elif step_ckpts:
-        return step_ckpts[-1]
-    elif epoch_ckpts:
-        return epoch_ckpts[-1]
+    # 1. Check pointer file
+    meta_path = os.path.join(DRIVE_CKPT_DIR, "latest_stage2_checkpoint.txt")
+    if os.path.exists(meta_path):
+        try:
+            with open(meta_path, "r") as f:
+                target = f.readline().strip()
+                if target and os.path.exists(target):
+                    return target
+        except Exception:
+            pass
+
+    # 2. Check rolling slots and legacy numbered files
+    patterns = [
+        "kion_stage2_step_slot_*.pth",
+        "kion_stage2_epoch_slot_*.pth",
+        "kion_stage2_step_*.pth",
+        "kion_stage2_epoch_*.pth",
+    ]
+    candidates = []
+    for pat in patterns:
+        candidates.extend(glob.glob(os.path.join(DRIVE_CKPT_DIR, pat)))
+
+    valid = [c for c in candidates if not c.endswith("best.pth") and not c.endswith("final.pth")]
+    if valid:
+        valid.sort(key=os.path.getmtime)
+        return valid[-1]
+
+    best_path = os.path.join(DRIVE_CKPT_DIR, "kion_stage2_best.pth")
+    if os.path.exists(best_path):
+        return best_path
     return None
 
 
@@ -198,6 +216,16 @@ def _load_stage1_checkpoint() -> str:
         return STAGE1_BEST
     if os.path.exists(STAGE1_FINAL):
         return STAGE1_FINAL
+    # Check pointer file
+    meta_path = os.path.join(DRIVE_CKPT_DIR, "latest_stage1_checkpoint.txt")
+    if os.path.exists(meta_path):
+        try:
+            with open(meta_path, "r") as f:
+                target = f.readline().strip()
+                if target and os.path.exists(target):
+                    return target
+        except Exception:
+            pass
     import glob
     candidates = sorted(glob.glob(os.path.join(DRIVE_CKPT_DIR, "kion_stage1_*.pth")), key=os.path.getmtime)
     if candidates:

@@ -72,7 +72,7 @@ def build_kion_config(
         "log_dir":               LOG_DIR,
         "first_stage_path":      "kion_stage1.pth",
         "save_freq":             1,
-        "save_step_interval":    1000,
+        "save_step_interval":    2500,
         "log_interval":          10,
         "device":                "cuda",
 
