@@ -298,7 +298,7 @@ def run_stage2_training(config_path: str = CONFIG_PATH):
     epochs              = config.get("epochs_2nd", 60)
     batch_size          = config.get("batch_size", 2)
     max_len             = config.get("max_len", 200)
-    save_step_interval  = config.get("save_step_interval", 500)
+    save_step_interval  = config.get("save_step_interval", 1000)
     sr                  = config["preprocess_params"].get("sr", 24000)
     slmadv_cfg          = Munch(config.get("slmadv_params", {}))
     device              = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -604,7 +604,7 @@ def run_stage2_training(config_path: str = CONFIG_PATH):
                     diff=f"{loss_diff.item():.4f}" if epoch >= diff_epoch else "—",
                 )
 
-                # ── Checkpoint every save_step_interval (500) steps ──
+                # ── Checkpoint every save_step_interval (1000) steps ──
                 if iters % save_step_interval == 0:
                     state = {
                         "net":       {k: model[k].state_dict() for k in model},
