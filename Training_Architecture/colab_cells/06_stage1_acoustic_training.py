@@ -362,6 +362,7 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
         if vram_gb < 20.0 and max_len > 200:
             print(f"    Auto-clamping max_len from {max_len} -> 200 frames for memory safety.")
             max_len = 200
+        torch.backends.cudnn.benchmark = True
 
     data_params = config["data_params"]
     train_list, val_list = get_data_path_list(
@@ -533,7 +534,7 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
                 break
 
             waves = batch[0]
-            batch = [b.to(device) for b in batch[1:]]
+            batch = [b.to(device, non_blocking=True) for b in batch[1:]]
             texts, input_lengths, _, _, mels, mel_input_length, _ = batch
 
             with torch.no_grad():
@@ -587,7 +588,7 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
                 en.append(asr[bib, :, rs:rs + mel_len])
                 gt.append(mels[bib, :, rs * 2:(rs + mel_len) * 2])
                 y = waves[bib][rs * 2 * 300:(rs + mel_len) * 2 * 300]
-                wav.append(torch.from_numpy(y).to(device))
+                wav.append(torch.from_numpy(y).to(device, non_blocking=True))
                 rs2 = np.random.randint(0, mel_length - mel_len_st)
                 st.append(mels[bib, :, rs2 * 2:(rs2 + mel_len_st) * 2])
 
@@ -686,7 +687,7 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
         with torch.no_grad():
             for batch in val_dataloader:
                 waves = batch[0]
-                batch = [b.to(device) for b in batch[1:]]
+                batch = [b.to(device, non_blocking=True) for b in batch[1:]]
                 texts, input_lengths, _, _, mels, mel_input_length, _ = batch
 
                 mask      = length_to_mask(mel_input_length // (2 ** n_down)).to(device)
@@ -705,7 +706,7 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
                     en.append(asr[bib, :, rs:rs + mel_len])
                     gt.append(mels[bib, :, rs * 2:(rs + mel_len) * 2])
                     y = waves[bib][rs * 2 * 300:(rs + mel_len) * 2 * 300]
-                    wav.append(torch.from_numpy(y).to(device))
+                    wav.append(torch.from_numpy(y).to(device, non_blocking=True))
 
                 en  = torch.stack(en)
                 gt  = torch.stack(gt).detach()
