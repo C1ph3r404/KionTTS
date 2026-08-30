@@ -146,30 +146,58 @@ kion_style_consistency = KionStyleConsistencyLoss()
 
 
 # ─── Checkpoint Helpers ───────────────────────────────────────────────────────
+def _is_valid_checkpoint(path: str) -> bool:
+    """Verifies that a checkpoint exists, is non-empty, and can be unpickled cleanly."""
+    if not path or not os.path.exists(path):
+        return False
+    try:
+        if os.path.getsize(path) < 1024 * 1024:  # Must be at least 1MB
+            return False
+        state = torch.load(path, map_location="cpu")
+        return isinstance(state, dict) and "net" in state
+    except Exception as e:
+        print(f"  [!] Integrity check failed for '{os.path.basename(path)}': {e}")
+        return False
+
+
 def _save_to_drive(state: dict, epoch: int, step: int = None, is_best: bool = False, stage: str = "stage2"):
     os.makedirs(DRIVE_CKPT_DIR, exist_ok=True)
     if step is not None:
         # Fixed rolling slots A & B (overwritten in-place, zero files deleted into Drive Trash!)
         slot = "A" if (step // 1000) % 2 == 0 else "B"
         ckpt_path = os.path.join(DRIVE_CKPT_DIR, f"kion_{stage}_step_slot_{slot}.pth")
-        torch.save(state, ckpt_path)
-        print(f"\n  [✓] Checkpoint saved at step {step} (Slot {slot}) → {ckpt_path}")
     else:
         # Fixed rolling slots A & B for epochs (overwritten in-place)
         slot = "A" if epoch % 2 == 0 else "B"
         ckpt_path = os.path.join(DRIVE_CKPT_DIR, f"kion_{stage}_epoch_slot_{slot}.pth")
-        torch.save(state, ckpt_path)
-        print(f"\n  [✓] Saved {stage} epoch checkpoint (Epoch {epoch}, Slot {slot}) → {ckpt_path}")
 
-    # Track latest checkpoint path in a lightweight pointer file
-    meta_path = os.path.join(DRIVE_CKPT_DIR, f"latest_{stage}_checkpoint.txt")
+    # Safe write: save to local /tmp first, verify integrity, then copy to Drive
+    tmp_path = f"/tmp/kion_{stage}_tmp_{int(time.time())}.pth"
     try:
-        with open(meta_path, "w") as f:
-            f.write(f"{ckpt_path}\n")
-    except Exception:
-        pass
+        torch.save(state, tmp_path)
+        if _is_valid_checkpoint(tmp_path):
+            shutil.copyfile(tmp_path, ckpt_path)
+            if step is not None:
+                print(f"\n  [✓] Verified & saved step checkpoint {step} (Slot {slot}) → {ckpt_path}")
+            else:
+                print(f"\n  [✓] Verified & saved epoch checkpoint (Epoch {epoch}, Slot {slot}) → {ckpt_path}")
+            # Update pointer file only on successful verified save
+            meta_path = os.path.join(DRIVE_CKPT_DIR, f"latest_{stage}_checkpoint.txt")
+            try:
+                with open(meta_path, "w") as f:
+                    f.write(f"{ckpt_path}\n")
+            except Exception:
+                pass
+        else:
+            print(f"  [!] Local save integrity check failed. Skipping copy to Drive.")
+    finally:
+        if os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
 
-    if is_best:
+    if is_best and os.path.exists(ckpt_path):
         best_path = os.path.join(DRIVE_CKPT_DIR, f"kion_{stage}_best.pth")
         shutil.copy2(ckpt_path, best_path)
         print(f"  [★] New best! → {best_path}")
@@ -177,6 +205,8 @@ def _save_to_drive(state: dict, epoch: int, step: int = None, is_best: bool = Fa
 
 def _find_latest_stage2_checkpoint() -> str | None:
     import glob
+    candidates = []
+
     # 1. Check pointer file
     meta_path = os.path.join(DRIVE_CKPT_DIR, "latest_stage2_checkpoint.txt")
     if os.path.exists(meta_path):
@@ -184,55 +214,76 @@ def _find_latest_stage2_checkpoint() -> str | None:
             with open(meta_path, "r") as f:
                 target = f.readline().strip()
                 if target and os.path.exists(target):
-                    return target
+                    candidates.append(target)
         except Exception:
             pass
 
-    # 2. Check rolling slots and legacy numbered files
+    # 2. Check rolling slots and legacy numbered files (sorted newest first)
     patterns = [
         "kion_stage2_step_slot_*.pth",
         "kion_stage2_epoch_slot_*.pth",
         "kion_stage2_step_*.pth",
         "kion_stage2_epoch_*.pth",
     ]
-    candidates = []
+    found = []
     for pat in patterns:
-        candidates.extend(glob.glob(os.path.join(DRIVE_CKPT_DIR, pat)))
+        found.extend(glob.glob(os.path.join(DRIVE_CKPT_DIR, pat)))
 
-    valid = [c for c in candidates if not c.endswith("best.pth") and not c.endswith("final.pth")]
-    if valid:
-        valid.sort(key=os.path.getmtime)
-        return valid[-1]
+    valid_found = [c for c in found if not c.endswith("best.pth") and not c.endswith("final.pth")]
+    valid_found.sort(key=os.path.getmtime, reverse=True)
+    for c in valid_found:
+        if c not in candidates:
+            candidates.append(c)
 
     best_path = os.path.join(DRIVE_CKPT_DIR, "kion_stage2_best.pth")
-    if os.path.exists(best_path):
-        return best_path
+    if os.path.exists(best_path) and best_path not in candidates:
+        candidates.append(best_path)
+
+    # 3. Test candidates for corruption; return newest intact one
+    for cand in candidates:
+        print(f"  Verifying integrity of candidate: {os.path.basename(cand)}...")
+        if _is_valid_checkpoint(cand):
+            print(f"  [✓] Integrity confirmed: {os.path.basename(cand)}")
+            return cand
+        else:
+            print(f"  [!] Checkpoint {os.path.basename(cand)} is damaged. Falling back to previous slot...")
+
     return None
 
 
 def _load_stage1_checkpoint() -> str:
-    """Returns the best available Stage 1 checkpoint path."""
+    """Returns the best available Stage 1 checkpoint path with integrity verification."""
+    candidates = []
     if os.path.exists(STAGE1_BEST):
-        return STAGE1_BEST
+        candidates.append(STAGE1_BEST)
     if os.path.exists(STAGE1_FINAL):
-        return STAGE1_FINAL
+        candidates.append(STAGE1_FINAL)
+
     # Check pointer file
     meta_path = os.path.join(DRIVE_CKPT_DIR, "latest_stage1_checkpoint.txt")
     if os.path.exists(meta_path):
         try:
             with open(meta_path, "r") as f:
                 target = f.readline().strip()
-                if target and os.path.exists(target):
-                    return target
+                if target and os.path.exists(target) and target not in candidates:
+                    candidates.append(target)
         except Exception:
             pass
+
     import glob
-    candidates = sorted(glob.glob(os.path.join(DRIVE_CKPT_DIR, "kion_stage1_*.pth")), key=os.path.getmtime)
-    if candidates:
-        return candidates[-1]
+    found = sorted(glob.glob(os.path.join(DRIVE_CKPT_DIR, "kion_stage1_*.pth")), key=os.path.getmtime, reverse=True)
+    for c in found:
+        if c not in candidates:
+            candidates.append(c)
+
+    for cand in candidates:
+        if _is_valid_checkpoint(cand):
+            print(f"  [✓] Stage 1 checkpoint verified: {os.path.basename(cand)}")
+            return cand
+
     raise FileNotFoundError(
-        "No Stage 1 checkpoint found. Run Cell 06 first.\n"
-        f"Expected: {STAGE1_BEST} or {STAGE1_FINAL}"
+        "No valid, uncorrupted Stage 1 checkpoint found. Run Cell 06 first.\n"
+        f"Checked candidates: {[os.path.basename(c) for c in candidates]}"
     )
 
 
