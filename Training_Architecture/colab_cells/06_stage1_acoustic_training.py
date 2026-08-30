@@ -458,13 +458,23 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
         running_loss = 0.0
         _ = [model[k].train() for k in stage1_active_keys if k in model]
 
+        total_steps_in_loader = len(train_dataloader)
+        if epoch == start_epoch and (iters % total_steps_in_loader) != 0:
+            remaining_steps = total_steps_in_loader - (iters % total_steps_in_loader)
+        else:
+            remaining_steps = total_steps_in_loader
+
         pbar = tqdm(
             train_dataloader,
+            total=remaining_steps,
             desc=f"Epoch {epoch+1:03d}/{epochs} [Stage 1]",
             leave=False,
         )
 
         for i, batch in enumerate(pbar):
+            if i >= remaining_steps:
+                break
+
             waves = batch[0]
             batch = [b.to(device) for b in batch[1:]]
             texts, input_lengths, _, _, mels, mel_input_length, _ = batch

@@ -458,9 +458,23 @@ def run_stage2_training(config_path: str = CONFIG_PATH):
         epoch_start = time.time()
         _ = [model[k].train() for k in model]
 
-        pbar = tqdm(train_dataloader, desc=f"Epoch {epoch+1:03d}/{epochs} [Stage 2]", leave=False)
+        total_steps_in_loader = len(train_dataloader)
+        if epoch == start_epoch and (iters % total_steps_in_loader) != 0:
+            remaining_steps = total_steps_in_loader - (iters % total_steps_in_loader)
+        else:
+            remaining_steps = total_steps_in_loader
+
+        pbar = tqdm(
+            train_dataloader,
+            total=remaining_steps,
+            desc=f"Epoch {epoch+1:03d}/{epochs} [Stage 2]",
+            leave=False,
+        )
 
         for i, batch in enumerate(pbar):
+            if i >= remaining_steps:
+                break
+
             waves = batch[0]
             batch = [b.to(device) for b in batch[1:]]
             texts, input_lengths, ref_texts, ref_lengths, mels, mel_input_length, _ = batch
