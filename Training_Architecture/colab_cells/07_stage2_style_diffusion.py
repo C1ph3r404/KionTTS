@@ -433,7 +433,7 @@ def run_stage2_training(config_path: str = CONFIG_PATH):
         start_epoch = ckpt.get("epoch", 0) + 1
         iters       = ckpt.get("iters", 0)
         best_loss   = ckpt.get("val_loss", float("inf"))
-        print(f"  Resumed at epoch {start_epoch}")
+        print(f"  [✓] Resumed state successfully: starting at epoch {start_epoch + 1}, step {iters}")
 
     # ── Loss modules ──────────────────────────────────────────────────────────
     try:
@@ -461,10 +461,6 @@ def run_stage2_training(config_path: str = CONFIG_PATH):
         pbar = tqdm(train_dataloader, desc=f"Epoch {epoch+1:03d}/{epochs} [Stage 2]", leave=False)
 
         for i, batch in enumerate(pbar):
-            # Skip batches already processed if resuming mid-epoch
-            if epoch == start_epoch and iters > 0 and i < (iters % len(train_dataloader)):
-                continue
-
             waves = batch[0]
             batch = [b.to(device) for b in batch[1:]]
             texts, input_lengths, ref_texts, ref_lengths, mels, mel_input_length, _ = batch
@@ -599,6 +595,7 @@ def run_stage2_training(config_path: str = CONFIG_PATH):
 
                 iters += 1
                 pbar.set_postfix(
+                    step=iters,
                     mel=f"{loss_mel.item():.4f}",
                     F0=f"{loss_F0.item():.4f}",
                     diff=f"{loss_diff.item():.4f}" if epoch >= diff_epoch else "—",

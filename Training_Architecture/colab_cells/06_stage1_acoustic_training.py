@@ -423,6 +423,7 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
             model, optimizer, start_epoch, iters = load_checkpoint(
                 model, optimizer, latest_ckpt, load_only_params=False
             )
+            print(f"  [✓] Resumed state successfully: starting at epoch {start_epoch + 1}, step {iters}")
         elif pretrained:
             print(f"  Loading pretrained model: {pretrained}")
             model, optimizer, start_epoch, iters = load_checkpoint(
@@ -464,10 +465,6 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
         )
 
         for i, batch in enumerate(pbar):
-            # Skip batches already processed if resuming mid-epoch
-            if epoch == start_epoch and iters > 0 and i < (iters % len(train_dataloader)):
-                continue
-
             waves = batch[0]
             batch = [b.to(device) for b in batch[1:]]
             texts, input_lengths, _, _, mels, mel_input_length, _ = batch
@@ -591,6 +588,7 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
             _to_num = lambda v: float(v.item()) if hasattr(v, "item") else float(v)
 
             pbar.set_postfix(
+                step=iters,
                 mel=f"{_to_num(loss_mel):.4f}",
                 gen=f"{_to_num(loss_gen_all):.4f}",
             )
