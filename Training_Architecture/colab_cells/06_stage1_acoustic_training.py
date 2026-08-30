@@ -693,18 +693,27 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
             )
             writer.add_scalar("eval/mel_loss", val_loss, epoch + 1)
 
-            # Write sample audio to TensorBoard every 5 epochs
-            if epoch % 5 == 0:
-                with torch.no_grad():
-                    for bib in range(min(3, len(en))):
-                        ml  = int(mel_input_length[bib].item())
-                        g   = mels[bib, :, :ml].unsqueeze(0)
-                        e   = asr[bib, :, :ml // 2].unsqueeze(0)
-                        F0r, _, _ = model["pitch_extractor"](g.unsqueeze(1))
-                        s_  = model["style_encoder"](g.unsqueeze(1))
-                        nr  = log_norm(g.unsqueeze(1)).squeeze(1)
-                        yr  = model["decoder"](e, F0r.unsqueeze(0), nr, s_)
-                        writer.add_audio(f"eval/synth_{bib}", yr.cpu().numpy().squeeze(), epoch, sample_rate=sr)
+            # Write sample audio to Google Drive and TensorBoard every epoch
+            sample_dir = os.path.join(DRIVE_CKPT_DIR, "samples")
+            os.makedirs(sample_dir, exist_ok=True)
+            with torch.no_grad():
+                for bib in range(min(3, len(en))):
+                    ml  = int(mel_input_length[bib].item())
+                    g   = mels[bib, :, :ml].unsqueeze(0)
+                    e   = asr[bib, :, :ml // 2].unsqueeze(0)
+                    F0r, _, _ = model["pitch_extractor"](g.unsqueeze(1))
+                    s_  = model["style_encoder"](g.unsqueeze(1))
+                    nr  = log_norm(g.unsqueeze(1)).squeeze(1)
+                    yr  = model["decoder"](e, F0r.unsqueeze(0), nr, s_)
+                    audio_arr = yr.cpu().numpy().squeeze()
+                    writer.add_audio(f"eval/synth_{bib}", audio_arr, epoch + 1, sample_rate=sr)
+                    try:
+                        import soundfile as sf
+                        wav_path = os.path.join(sample_dir, f"kion_stage1_epoch_{epoch+1:03d}_sample_{bib+1}.wav")
+                        sf.write(wav_path, audio_arr, sr)
+                    except Exception:
+                        pass
+            print(f"  [♫] Saved {min(3, len(en))} audio samples → {sample_dir}")
 
             # Save checkpoint
             if (epoch + 1) % save_freq == 0 or is_best:
