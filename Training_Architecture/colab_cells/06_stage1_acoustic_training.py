@@ -363,6 +363,11 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
             print(f"    Auto-clamping max_len from {max_len} -> 200 frames for memory safety.")
             max_len = 200
         torch.backends.cudnn.benchmark = True
+        try:
+            torch.backends.cuda.enable_flash_sdp(True)
+            torch.backends.cuda.enable_mem_efficient_sdp(True)
+        except Exception:
+            pass
 
     data_params = config["data_params"]
     train_list, val_list = get_data_path_list(
@@ -504,6 +509,10 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
         sr,
         model_params.slm.sr,
     ).to(device)
+    if hasattr(wl, "wavlm"):
+        wl.wavlm.eval()
+        for param in wl.wavlm.parameters():
+            param.requires_grad = False
 
     print(f"\n  Starting training from epoch {start_epoch + 1}...")
     torch.cuda.empty_cache()
@@ -549,8 +558,9 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
                     ppgs, s2s_pred, s2s_attn = model["text_aligner"](mels, mask, texts)
                     s2s_attn = s2s_attn.transpose(-1, -2)[..., 1:].transpose(-1, -2)
             else:
-                ppgs, s2s_pred, s2s_attn = model["text_aligner"](mels, mask, texts)
-                s2s_attn = s2s_attn.transpose(-1, -2)[..., 1:].transpose(-1, -2)
+                with accelerator.autocast():
+                    ppgs, s2s_pred, s2s_attn = model["text_aligner"](mels, mask, texts)
+                    s2s_attn = s2s_attn.transpose(-1, -2)[..., 1:].transpose(-1, -2)
 
             with torch.no_grad():
                 attn_mask = (
@@ -571,10 +581,11 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
                 s2s_attn_mono = maximum_path(s2s_attn, mask_ST)
 
             # Text encode
-            t_en = model["text_encoder"](texts, input_lengths, text_mask)
+            with accelerator.autocast():
+                t_en = model["text_encoder"](texts, input_lengths, text_mask)
 
-            # 50/50 soft vs monotonic alignment
-            asr = (t_en @ s2s_attn) if random.getrandbits(1) else (t_en @ s2s_attn_mono)
+                # 50/50 soft vs monotonic alignment
+                asr = (t_en @ s2s_attn) if random.getrandbits(1) else (t_en @ s2s_attn_mono)
 
             # Build random clips
             mel_input_length_all = accelerator.gather(mel_input_length)
@@ -605,42 +616,45 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
                 real_norm        = log_norm(gt.unsqueeze(1)).squeeze(1).detach()
                 F0_real, _, _    = model["pitch_extractor"](gt.unsqueeze(1))
 
-            s = model["style_encoder"](gt.unsqueeze(1))  # acoustic style (training only)
+            with accelerator.autocast():
+                s = model["style_encoder"](gt.unsqueeze(1))  # acoustic style (training only)
+                y_rec = model["decoder"](en, F0_real, real_norm, s)
 
-            y_rec = model["decoder"](en, F0_real, real_norm, s)
+                # ── Discriminator step ──────────────────────────────────────
+                if epoch >= TMA_epoch:
+                    optimizer.zero_grad()
+                    d_loss = dl(wav.detach().unsqueeze(1).float(), y_rec.detach()).mean()
+                else:
+                    d_loss = 0
 
-            # ── Discriminator step ──────────────────────────────────────
             if epoch >= TMA_epoch:
-                optimizer.zero_grad()
-                d_loss = dl(wav.detach().unsqueeze(1).float(), y_rec.detach()).mean()
                 accelerator.backward(d_loss)
                 optimizer.step("msd")
                 optimizer.step("mpd")
-            else:
-                d_loss = 0
 
             # ── Generator step ──────────────────────────────────────────
             optimizer.zero_grad()
-            loss_mel = stft_loss(y_rec.squeeze(), wav.detach())
+            with accelerator.autocast():
+                loss_mel = stft_loss(y_rec.squeeze(), wav.detach())
 
-            if epoch >= TMA_epoch:
-                loss_s2s = sum(
-                    F.cross_entropy(pred[:tl], txt[:tl])
-                    for pred, txt, tl in zip(s2s_pred, texts, input_lengths)
-                ) / texts.size(0)
-                loss_mono    = F.l1_loss(s2s_attn, s2s_attn_mono) * 10
-                loss_gen_all = gl(wav.detach().unsqueeze(1).float(), y_rec).mean()
-                loss_slm     = wl(wav.detach(), y_rec).mean()
-                g_loss = (
-                    loss_params.lambda_mel  * loss_mel
-                    + loss_params.lambda_mono * loss_mono
-                    + loss_params.lambda_s2s  * loss_s2s
-                    + loss_params.lambda_gen  * loss_gen_all
-                    + loss_params.lambda_slm  * loss_slm
-                )
-            else:
-                loss_s2s = loss_mono = loss_gen_all = loss_slm = 0
-                g_loss = loss_mel
+                if epoch >= TMA_epoch:
+                    loss_s2s = sum(
+                        F.cross_entropy(pred[:tl], txt[:tl])
+                        for pred, txt, tl in zip(s2s_pred, texts, input_lengths)
+                    ) / texts.size(0)
+                    loss_mono    = F.l1_loss(s2s_attn, s2s_attn_mono) * 10
+                    loss_gen_all = gl(wav.detach().unsqueeze(1).float(), y_rec).mean()
+                    loss_slm     = wl(wav.detach(), y_rec).mean()
+                    g_loss = (
+                        loss_params.lambda_mel  * loss_mel
+                        + loss_params.lambda_mono * loss_mono
+                        + loss_params.lambda_s2s  * loss_s2s
+                        + loss_params.lambda_gen  * loss_gen_all
+                        + loss_params.lambda_slm  * loss_slm
+                    )
+                else:
+                    loss_s2s = loss_mono = loss_gen_all = loss_slm = 0
+                    g_loss = loss_mel
 
             running_loss += accelerator.gather(loss_mel).mean().item()
             accelerator.backward(g_loss)
