@@ -505,6 +505,15 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
         model_params.slm.sr,
     ).to(device)
 
+    # ── Speed Optimization: Freeze WavLM SLM backbone ────────────────────────
+    # WavLM is an auxiliary feature extractor (94M params). Freezing its weights
+    # prevents PyTorch from allocating gradients and tracking computation graphs
+    # for all 13 transformer layers during generator backward passes.
+    if hasattr(wl, "wavlm") and wl.wavlm is not None:
+        wl.wavlm.eval()
+        for p in wl.wavlm.parameters():
+            p.requires_grad = False
+
     print(f"\n  Starting training from epoch {start_epoch + 1}...")
     torch.cuda.empty_cache()
 
@@ -541,116 +550,123 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
                 mask      = length_to_mask(mel_input_length // (2 ** n_down)).to(device)
                 text_mask = length_to_mask(input_lengths).to(device)
 
-            # ASR aligner forward
-            # When epoch < TMA_epoch, text_aligner is frozen and no s2s/mono loss is backpropagated.
-            # Wrapping with no_grad() prevents saving huge ASR transformer attention activation graphs.
-            if epoch < TMA_epoch:
-                with torch.no_grad():
+            # ── Mixed Precision Autocast for Forward & Loss Passes ───────────
+            with accelerator.autocast():
+                # ASR aligner forward
+                # When epoch < TMA_epoch, text_aligner is frozen and no s2s/mono loss is backpropagated.
+                # Wrapping with no_grad() prevents saving huge ASR transformer attention activation graphs.
+                if epoch < TMA_epoch:
+                    with torch.no_grad():
+                        ppgs, s2s_pred, s2s_attn = model["text_aligner"](mels, mask, texts)
+                        s2s_attn = s2s_attn.transpose(-1, -2)[..., 1:].transpose(-1, -2)
+                else:
                     ppgs, s2s_pred, s2s_attn = model["text_aligner"](mels, mask, texts)
                     s2s_attn = s2s_attn.transpose(-1, -2)[..., 1:].transpose(-1, -2)
-            else:
-                ppgs, s2s_pred, s2s_attn = model["text_aligner"](mels, mask, texts)
-                s2s_attn = s2s_attn.transpose(-1, -2)[..., 1:].transpose(-1, -2)
 
-            with torch.no_grad():
-                attn_mask = (
-                    (~mask).unsqueeze(-1)
-                    .expand(mask.shape[0], mask.shape[1], text_mask.shape[-1])
-                    .float()
-                    .transpose(-1, -2)
-                ) * (
-                    (~text_mask).unsqueeze(-1)
-                    .expand(*text_mask.shape, mask.shape[-1])
-                    .float()
-                )
-                attn_mask  = attn_mask < 1
-            s2s_attn.masked_fill_(attn_mask, 0.0)
+                with torch.no_grad():
+                    attn_mask = (
+                        (~mask).unsqueeze(-1)
+                        .expand(mask.shape[0], mask.shape[1], text_mask.shape[-1])
+                        .float()
+                        .transpose(-1, -2)
+                    ) * (
+                        (~text_mask).unsqueeze(-1)
+                        .expand(*text_mask.shape, mask.shape[-1])
+                        .float()
+                    )
+                    attn_mask  = attn_mask < 1
+                s2s_attn.masked_fill_(attn_mask, 0.0)
 
-            with torch.no_grad():
-                mask_ST       = mask_from_lens(s2s_attn, input_lengths, mel_input_length // (2 ** n_down))
-                s2s_attn_mono = maximum_path(s2s_attn, mask_ST)
+                with torch.no_grad():
+                    mask_ST       = mask_from_lens(s2s_attn, input_lengths, mel_input_length // (2 ** n_down))
+                    s2s_attn_mono = maximum_path(s2s_attn, mask_ST)
 
-            # Text encode
-            t_en = model["text_encoder"](texts, input_lengths, text_mask)
+                # Text encode
+                t_en = model["text_encoder"](texts, input_lengths, text_mask)
 
-            # 50/50 soft vs monotonic alignment
-            asr = (t_en @ s2s_attn) if random.getrandbits(1) else (t_en @ s2s_attn_mono)
+                # 50/50 soft vs monotonic alignment
+                asr = (t_en @ s2s_attn) if random.getrandbits(1) else (t_en @ s2s_attn_mono)
 
-            # Build random clips
-            mel_input_length_all = accelerator.gather(mel_input_length)
-            mel_len    = min(int(mel_input_length_all.min().item() / 2 - 1), max_len // 2)
-            mel_len_st = int(mel_input_length.min().item() / 2 - 1)
+                # Build random clips
+                mel_input_length_all = accelerator.gather(mel_input_length)
+                mel_len    = min(int(mel_input_length_all.min().item() / 2 - 1), max_len // 2)
+                mel_len_st = int(mel_input_length.min().item() / 2 - 1)
 
-            en, gt, wav, st = [], [], [], []
-            for bib in range(len(mel_input_length)):
-                mel_length = int(mel_input_length[bib].item() / 2)
-                rs = np.random.randint(0, mel_length - mel_len)
-                en.append(asr[bib, :, rs:rs + mel_len])
-                gt.append(mels[bib, :, rs * 2:(rs + mel_len) * 2])
-                y = waves[bib][rs * 2 * 300:(rs + mel_len) * 2 * 300]
-                wav.append(torch.from_numpy(y).to(device, non_blocking=True))
-                rs2 = np.random.randint(0, mel_length - mel_len_st)
-                st.append(mels[bib, :, rs2 * 2:(rs2 + mel_len_st) * 2])
+                en, gt, wav, st = [], [], [], []
+                for bib in range(len(mel_input_length)):
+                    mel_length = int(mel_input_length[bib].item() / 2)
+                    rs = np.random.randint(0, mel_length - mel_len)
+                    en.append(asr[bib, :, rs:rs + mel_len])
+                    gt.append(mels[bib, :, rs * 2:(rs + mel_len) * 2])
+                    y = waves[bib][rs * 2 * 300:(rs + mel_len) * 2 * 300]
+                    wav.append(torch.from_numpy(y).to(device, non_blocking=True))
+                    rs2 = np.random.randint(0, mel_length - mel_len_st)
+                    st.append(mels[bib, :, rs2 * 2:(rs2 + mel_len_st) * 2])
 
-            en  = torch.stack(en)
-            gt  = torch.stack(gt).detach()
-            st  = torch.stack(st).detach()
-            wav = torch.stack(wav).float().detach()
+                en  = torch.stack(en)
+                gt  = torch.stack(gt).detach()
+                st  = torch.stack(st).detach()
+                wav = torch.stack(wav).float().detach()
 
-            if gt.shape[-1] < 80:
-                continue
+                if gt.shape[-1] < 80:
+                    continue
 
-            # F0 and style extraction
-            with torch.no_grad():
-                real_norm        = log_norm(gt.unsqueeze(1)).squeeze(1).detach()
-                F0_real, _, _    = model["pitch_extractor"](gt.unsqueeze(1))
+                # F0 and style extraction
+                with torch.no_grad():
+                    real_norm        = log_norm(gt.unsqueeze(1)).squeeze(1).detach()
+                    F0_real, _, _    = model["pitch_extractor"](gt.unsqueeze(1))
 
-            s = model["style_encoder"](gt.unsqueeze(1))  # acoustic style (training only)
+                s = model["style_encoder"](gt.unsqueeze(1))  # acoustic style (training only)
 
-            y_rec = model["decoder"](en, F0_real, real_norm, s)
+                y_rec = model["decoder"](en, F0_real, real_norm, s)
 
-            # ── Discriminator step ──────────────────────────────────────
-            if epoch >= TMA_epoch:
+                # ── Discriminator step ──────────────────────────────────────
+                if epoch >= TMA_epoch:
+                    optimizer.zero_grad()
+                    d_loss = dl(wav.detach().unsqueeze(1).float(), y_rec.detach()).mean()
+                    accelerator.backward(d_loss)
+                    optimizer.step("msd")
+                    optimizer.step("mpd")
+                else:
+                    d_loss = 0
+
+                # ── Generator step ──────────────────────────────────────────
                 optimizer.zero_grad()
-                d_loss = dl(wav.detach().unsqueeze(1).float(), y_rec.detach()).mean()
-                accelerator.backward(d_loss)
-                optimizer.step("msd")
-                optimizer.step("mpd")
-            else:
-                d_loss = 0
+                loss_mel = stft_loss(y_rec.squeeze(), wav.detach())
 
-            # ── Generator step ──────────────────────────────────────────
-            optimizer.zero_grad()
-            loss_mel = stft_loss(y_rec.squeeze(), wav.detach())
+                if epoch >= TMA_epoch:
+                    # Vectorized batched S2S cross-entropy
+                    loss_s2s = F.cross_entropy(
+                        s2s_pred.transpose(1, 2), texts, reduction="none"
+                    )
+                    loss_s2s = (loss_s2s * text_mask).sum() / text_mask.sum().clamp(min=1)
 
-            if epoch >= TMA_epoch:
-                loss_s2s = sum(
-                    F.cross_entropy(pred[:tl], txt[:tl])
-                    for pred, txt, tl in zip(s2s_pred, texts, input_lengths)
-                ) / texts.size(0)
-                loss_mono    = F.l1_loss(s2s_attn, s2s_attn_mono) * 10
-                loss_gen_all = gl(wav.detach().unsqueeze(1).float(), y_rec).mean()
-                loss_slm     = wl(wav.detach(), y_rec).mean()
-                g_loss = (
-                    loss_params.lambda_mel  * loss_mel
-                    + loss_params.lambda_mono * loss_mono
-                    + loss_params.lambda_s2s  * loss_s2s
-                    + loss_params.lambda_gen  * loss_gen_all
-                    + loss_params.lambda_slm  * loss_slm
-                )
-            else:
-                loss_s2s = loss_mono = loss_gen_all = loss_slm = 0
-                g_loss = loss_mel
+                    loss_mono    = F.l1_loss(s2s_attn, s2s_attn_mono) * 10
+                    loss_gen_all = gl(wav.detach().unsqueeze(1).float(), y_rec).mean()
+                    loss_slm     = wl(wav.detach(), y_rec).mean()
+                    g_loss = (
+                        loss_params.lambda_mel  * loss_mel
+                        + loss_params.lambda_mono * loss_mono
+                        + loss_params.lambda_s2s  * loss_s2s
+                        + loss_params.lambda_gen  * loss_gen_all
+                        + loss_params.lambda_slm  * loss_slm
+                    )
+                else:
+                    loss_s2s = loss_mono = loss_gen_all = loss_slm = 0
+                    g_loss = loss_mel
 
-            running_loss += accelerator.gather(loss_mel).mean().item()
-            accelerator.backward(g_loss)
+                running_loss += accelerator.gather(loss_mel).mean().item()
+                accelerator.backward(g_loss)
 
-            optimizer.step("text_encoder")
-            optimizer.step("style_encoder")
-            optimizer.step("decoder")
-            if epoch >= TMA_epoch:
-                optimizer.step("text_aligner")
-                optimizer.step("pitch_extractor")
+                optimizer.step("text_encoder")
+                optimizer.step("style_encoder")
+                optimizer.step("decoder")
+                if epoch >= TMA_epoch:
+                    optimizer.step("text_aligner")
+                    optimizer.step("pitch_extractor")
+
+                # Step learning rate schedulers
+                optimizer.scheduler()
 
             iters += 1
             _to_num = lambda v: float(v.item()) if hasattr(v, "item") else float(v)
@@ -664,11 +680,11 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
             # ── Checkpoint every save_step_interval (1000) steps ──
             if iters % save_step_interval == 0 and accelerator.is_main_process:
                 state = {
-                    "net":       {k: model[k].state_dict() for k in model},
+                    "net":       {k: accelerator.unwrap_model(model[k]).state_dict() for k in model},
                     "optimizer": optimizer.state_dict(),
                     "iters":     iters,
                     "val_loss":  running_loss / max((i % log_interval) + 1, 1),
-                    "epoch":     epoch,
+                    "epoch":     epoch,  # In-progress epoch
                 }
                 _save_to_drive(state, epoch=epoch + 1, step=iters)
 
@@ -684,7 +700,7 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
         loss_test = 0.0
         iters_test = 0
 
-        with torch.no_grad():
+        with torch.no_grad(), accelerator.autocast():
             for batch in val_dataloader:
                 waves = batch[0]
                 batch = [b.to(device, non_blocking=True) for b in batch[1:]]
@@ -735,36 +751,37 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
             )
             writer.add_scalar("eval/mel_loss", val_loss, epoch + 1)
 
-            # Write sample audio to Google Drive and TensorBoard every epoch
-            sample_dir = os.path.join(DRIVE_CKPT_DIR, "samples")
-            os.makedirs(sample_dir, exist_ok=True)
-            with torch.no_grad():
-                for bib in range(min(3, len(en))):
-                    ml  = int(mel_input_length[bib].item())
-                    g   = mels[bib, :, :ml].unsqueeze(0)
-                    e   = asr[bib, :, :ml // 2].unsqueeze(0)
-                    F0r, _, _ = model["pitch_extractor"](g.unsqueeze(1))
-                    s_  = model["style_encoder"](g.unsqueeze(1))
-                    nr  = log_norm(g.unsqueeze(1)).squeeze(1)
-                    yr  = model["decoder"](e, F0r.unsqueeze(0), nr, s_)
-                    audio_arr = yr.cpu().numpy().squeeze()
-                    writer.add_audio(f"eval/synth_{bib}", audio_arr, epoch + 1, sample_rate=sr)
-                    try:
-                        import soundfile as sf
-                        wav_path = os.path.join(sample_dir, f"kion_stage1_epoch_{epoch+1:03d}_sample_{bib+1}.wav")
-                        sf.write(wav_path, audio_arr, sr)
-                    except Exception:
-                        pass
-            print(f"  [♫] Saved {min(3, len(en))} audio samples → {sample_dir}")
+            # Write sample audio to Google Drive and TensorBoard on best or every 5 epochs
+            if (epoch + 1) % 5 == 0 or is_best:
+                sample_dir = os.path.join(DRIVE_CKPT_DIR, "samples")
+                os.makedirs(sample_dir, exist_ok=True)
+                with torch.no_grad():
+                    for bib in range(min(3, len(en))):
+                        ml  = int(mel_input_length[bib].item())
+                        g   = mels[bib, :, :ml].unsqueeze(0)
+                        e   = asr[bib, :, :ml // 2].unsqueeze(0)
+                        F0r, _, _ = model["pitch_extractor"](g.unsqueeze(1))
+                        s_  = model["style_encoder"](g.unsqueeze(1))
+                        nr  = log_norm(g.unsqueeze(1)).squeeze(1)
+                        yr  = model["decoder"](e, F0r.unsqueeze(0), nr, s_)
+                        audio_arr = yr.cpu().numpy().squeeze()
+                        writer.add_audio(f"eval/synth_{bib}", audio_arr, epoch + 1, sample_rate=sr)
+                        try:
+                            import soundfile as sf
+                            wav_path = os.path.join(sample_dir, f"kion_stage1_epoch_{epoch+1:03d}_sample_{bib+1}.wav")
+                            sf.write(wav_path, audio_arr, sr)
+                        except Exception:
+                            pass
+                print(f"  [♫] Saved {min(3, len(en))} audio samples → {sample_dir}")
 
             # Save checkpoint
             if (epoch + 1) % save_freq == 0 or is_best:
                 state = {
-                    "net":       {k: model[k].state_dict() for k in model},
+                    "net":       {k: accelerator.unwrap_model(model[k]).state_dict() for k in model},
                     "optimizer": optimizer.state_dict(),
                     "iters":     iters,
                     "val_loss":  val_loss,
-                    "epoch":     epoch,
+                    "epoch":     epoch + 1,  # Completed epoch: resume starts from next epoch
                 }
                 _save_to_drive(state, epoch + 1, is_best=is_best)
 
@@ -772,7 +789,7 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
     if accelerator.is_main_process:
         print("\n[+] Stage 1 training complete!")
         state = {
-            "net":       {k: model[k].state_dict() for k in model},
+            "net":       {k: accelerator.unwrap_model(model[k]).state_dict() for k in model},
             "optimizer": optimizer.state_dict(),
             "iters":     iters,
             "val_loss":  best_loss,
