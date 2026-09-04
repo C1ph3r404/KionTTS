@@ -362,7 +362,14 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
         if vram_gb < 20.0 and max_len > 200:
             print(f"    Auto-clamping max_len from {max_len} -> 200 frames for memory safety.")
             max_len = 200
-        torch.backends.cudnn.benchmark = True
+        # benchmark=True causes a 3-8 min stall on first AMP iteration: cuDNN
+        # searches for the optimal conv algorithm for every unique input shape.
+        # Audio models have variable-length inputs so benchmark never converges —
+        # it re-searches on every new shape. Use allow_tf32 instead for free
+        # Tensor Core speedup (Ampere+ GPUs) without any benchmarking overhead.
+        torch.backends.cudnn.benchmark    = False
+        torch.backends.cudnn.allow_tf32   = True
+        torch.backends.cuda.matmul.allow_tf32 = True
 
     data_params = config["data_params"]
     train_list, val_list = get_data_path_list(
