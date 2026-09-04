@@ -714,7 +714,7 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
         loss_test = torch.tensor(0.0, device=device)
         iters_test = 0
 
-        with torch.no_grad(), accelerator.autocast():
+        with torch.no_grad():
             for batch in val_dataloader:
                 waves = batch[0]
                 batch = [b.to(device, non_blocking=True) for b in batch[1:]]
@@ -724,6 +724,8 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
                 text_mask = length_to_mask(input_lengths).to(device)
                 _, _, s2s_attn = model["text_aligner"](mels, mask, texts)
                 s2s_attn = s2s_attn.transpose(-1, -2)[..., 1:].transpose(-1, -2)
+                attn_mask = text_mask.unsqueeze(2) | mask.unsqueeze(1)
+                s2s_attn.masked_fill_(attn_mask, 0.0)
 
                 t_en = model["text_encoder"](texts, input_lengths, text_mask)
                 asr  = t_en @ s2s_attn
@@ -749,8 +751,9 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
                 real_norm     = log_norm(gt_in).squeeze(1)
                 y_rec         = model["decoder"](en, F0_real, real_norm, s)
                 loss_mel      = stft_loss(y_rec.squeeze(1), wav.detach())
-                loss_test    += loss_mel.detach()
-                iters_test   += 1
+                if not (torch.isnan(loss_mel) or torch.isinf(loss_mel)):
+                    loss_test    += loss_mel.detach()
+                    iters_test   += 1
 
         torch.cuda.empty_cache()
 
@@ -781,6 +784,9 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
                         nr  = log_norm(g.unsqueeze(1)).squeeze(1)
                         yr  = model["decoder"](e, F0r.unsqueeze(0), nr, s_)
                         audio_arr = yr.cpu().numpy().squeeze()
+                        max_val = np.abs(audio_arr).max()
+                        if max_val > 1.0:
+                            audio_arr = audio_arr / (max_val + 1e-6)
                         writer.add_audio(f"eval/synth_{bib}", audio_arr, epoch + 1, sample_rate=sr)
                         try:
                             import soundfile as sf
