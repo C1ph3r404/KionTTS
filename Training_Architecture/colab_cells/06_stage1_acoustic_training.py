@@ -355,7 +355,7 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
     # ── Protect against CUDA OOM on Colab T4 (15GB VRAM) ──
     if torch.cuda.is_available():
         vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)
-        if vram_gb < 16.0 and batch_size > 2:
+        if vram_gb < 14.0 and batch_size > 2:
             print(f"[*] Detected {vram_gb:.1f} GB VRAM (T4 / mid-VRAM GPU).")
             print(f"    Auto-clamping batch_size from {batch_size} -> 2 to prevent CUDA OutOfMemoryError.")
             batch_size = 2
@@ -609,13 +609,13 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
             # ONE autocast context for all ops so the backward graph is fully
             # self-consistent. Splitting y_rec across multiple autocast blocks
             # causes "FIND was unable to find an engine" on iSTFTNet backward.
+            #
+            # d_loss is computed OUTSIDE this block (with y_rec.detach()) so
+            # the discriminator's forward graph does NOT coexist in VRAM with
+            # the full generator graph — this was the source of the batch-4 OOM.
             with accelerator.autocast():
                 s     = model["style_encoder"](gt.unsqueeze(1))
                 y_rec = model["decoder"](en, F0_real, real_norm, s)
-
-                # Disc loss: y_rec.detach() breaks the graph — safe to backward later
-                if epoch >= TMA_epoch:
-                    d_loss = dl(wav.detach().unsqueeze(1).float(), y_rec.detach()).mean()
 
                 # Generator losses
                 loss_mel = stft_loss(y_rec.squeeze(), wav.detach())
@@ -638,8 +638,14 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
                     )
                 else:
                     loss_s2s = loss_mono = loss_gen_all = loss_slm = 0
-                    d_loss   = 0
                     g_loss   = loss_mel
+
+            # Disc loss outside autocast: y_rec.detach() breaks the gen graph so
+            # only the disc forward (msd/mpd) tensors are live here — not y_rec's graph.
+            if epoch >= TMA_epoch:
+                d_loss = dl(wav.detach().unsqueeze(1).float(), y_rec.detach()).mean()
+            else:
+                d_loss = 0
 
             # ── Generator backward FIRST ────────────────────────────────────
             # g_loss includes gl(wav, y_rec) which ran disc forward → disc params
