@@ -607,29 +607,32 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
             if gt.shape[-1] < 80:
                 continue
 
-            # F0 and style extraction
+            # F0 and style extraction (always no_grad — pitch/norm are fixed inputs)
             with torch.no_grad():
                 real_norm        = log_norm(gt.unsqueeze(1)).squeeze(1).detach()
                 F0_real, _, _    = model["pitch_extractor"](gt.unsqueeze(1))
 
-            with accelerator.autocast():
-                s = model["style_encoder"](gt.unsqueeze(1))  # acoustic style (training only)
-                y_rec = model["decoder"](en, F0_real, real_norm, s)
-
-            # ── Discriminator step ──
+            # ── Discriminator step ──────────────────────────────────────────────
+            # Fresh detached forward pass for disc: backward never touches decoder grads.
+            # Each autocast block is self-contained so cuDNN can find backward kernels.
             if epoch >= TMA_epoch:
                 optimizer.zero_grad("msd")
                 optimizer.zero_grad("mpd")
                 optimizer.zero_grad("wd")  # prevent grad accumulation in SLM head
                 with accelerator.autocast():
-                    d_loss = dl(wav.detach().unsqueeze(1).float(), y_rec.detach()).mean()
+                    _s_d   = model["style_encoder"](gt.unsqueeze(1))
+                    _y_d   = model["decoder"](en, F0_real, real_norm, _s_d)
+                    d_loss = dl(wav.detach().unsqueeze(1).float(), _y_d.detach()).mean()
                 accelerator.backward(d_loss)
                 optimizer.step("msd")
                 optimizer.step("mpd")
+                del _s_d, _y_d
             else:
                 d_loss = 0
 
-            # ── Generator step ──
+            # ── Generator step ──────────────────────────────────────────────────
+            # Fresh forward pass with grads. Backward is called immediately after
+            # this autocast block exits so the graph stays within one AMP context.
             optimizer.zero_grad("text_encoder")
             optimizer.zero_grad("style_encoder")
             optimizer.zero_grad("decoder")
@@ -638,6 +641,8 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
                 optimizer.zero_grad("pitch_extractor")
 
             with accelerator.autocast():
+                s     = model["style_encoder"](gt.unsqueeze(1))
+                y_rec = model["decoder"](en, F0_real, real_norm, s)
                 loss_mel = stft_loss(y_rec.squeeze(), wav.detach())
 
                 if epoch >= TMA_epoch:
@@ -648,7 +653,7 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
 
                     loss_mono    = F.l1_loss(s2s_attn, s2s_attn_mono) * 10
                     loss_gen_all = gl(wav.detach().unsqueeze(1).float(), y_rec).mean()
-                    # Pass .float() explicitly: autocast is scoped here, WavLM needs fp32 input
+                    # .float() required: WavLM SLM backbone is frozen in fp32
                     loss_slm     = wl(wav.detach().float(), y_rec.float()).mean()
                     g_loss = (
                         loss_params.lambda_mel  * loss_mel
@@ -661,6 +666,9 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
                     loss_s2s = loss_mono = loss_gen_all = loss_slm = 0
                     g_loss = loss_mel
 
+            # Backward is OUTSIDE autocast but graph stays in fp16 — this matches
+            # the original StyleTTS2 train_first.py pattern and avoids the cuDNN
+            # "FIND was unable to find an engine" error on iSTFTNet backward.
             running_loss += accelerator.gather(loss_mel).mean().item()
             accelerator.backward(g_loss)
 
