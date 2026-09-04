@@ -154,8 +154,33 @@ class GeneratorLoss(torch.nn.Module):
         self.msd = msd
         
     def forward(self, y, y_hat):
-        y_df_hat_r, y_df_hat_g, fmap_f_r, fmap_f_g = self.mpd(y, y_hat)
-        y_ds_hat_r, y_ds_hat_g, fmap_s_r, fmap_s_g = self.msd(y, y_hat)
+        # Real audio reference features under no_grad (constant target, zero graph memory)
+        with torch.no_grad():
+            y_df_hat_r, fmap_f_r = [], []
+            for d in self.mpd.discriminators:
+                r, f = d(y)
+                y_df_hat_r.append(r)
+                fmap_f_r.append(f)
+
+            y_ds_hat_r, fmap_s_r = [], []
+            for d in self.msd.discriminators:
+                r, f = d(y)
+                y_ds_hat_r.append(r)
+                fmap_s_r.append(f)
+
+        # Generated audio features with gradients
+        y_df_hat_g, fmap_f_g = [], []
+        for d in self.mpd.discriminators:
+            g, f = d(y_hat)
+            y_df_hat_g.append(g)
+            fmap_f_g.append(f)
+
+        y_ds_hat_g, fmap_s_g = [], []
+        for d in self.msd.discriminators:
+            g, f = d(y_hat)
+            y_ds_hat_g.append(g)
+            fmap_s_g.append(f)
+
         loss_fm_f = feature_loss(fmap_f_r, fmap_f_g)
         loss_fm_s = feature_loss(fmap_s_r, fmap_s_g)
         loss_gen_f, losses_gen_f = generator_loss(y_df_hat_g)

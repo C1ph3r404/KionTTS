@@ -432,15 +432,23 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
     model["kion_style_adapter"] = kion_style_adapter
 
     # ── Memory Optimization for Stage 1 ──────────────────────────────────────
-    # Stage 1 only trains: text_encoder, style_encoder, decoder, mpd, msd, wd,
-    # and (after TMA_epoch) text_aligner and pitch_extractor.
+    # Stage 1 only trains: text_encoder, style_encoder, decoder, mpd, msd,
+    # and (after TMA_epoch) text_aligner. pitch_extractor is frozen on GPU.
     # Stage 2 modules (bert, bert_encoder, predictor, predictor_encoder, diffusion,
     # and kion_style_adapter) are NEVER invoked in Stage 1. Keeping them on CPU
     # saves ~2.5 GB of GPU VRAM on T4, leaving headroom for the iSTFTNet decoder.
+    # Modules placed on GPU for Stage 1 execution.
     stage1_active_keys = [
         "text_encoder", "style_encoder", "decoder",
         "text_aligner", "pitch_extractor",
         "mpd", "msd"
+    ]
+    # Modules that receive parameter updates (have AdamW optimizers allocated).
+    # pitch_extractor is a frozen pre-trained F0 model (always evaluated under no_grad);
+    # excluding it saves AdamW 1st/2nd moment GPU states and dead optimizer step overhead.
+    stage1_train_keys = [
+        "text_encoder", "style_encoder", "decoder",
+        "text_aligner", "mpd", "msd"
     ]
 
     for k in model:
@@ -450,6 +458,11 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
         else:
             model[k] = model[k].to("cpu")
 
+    # Freeze pitch_extractor (evaluated only under no_grad)
+    for p in model["pitch_extractor"].parameters():
+        p.requires_grad = False
+    model["pitch_extractor"].eval()
+
     # 7. Scheduler + optimiser (only allocate optimizer states for Stage 1 modules)
     scheduler_params = {
         "max_lr":           float(config["optimizer_params"].get("lr", 1e-4)),
@@ -458,8 +471,8 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
         "steps_per_epoch":  len(train_dataloader),
     }
     optimizer = build_optimizer(
-        {k: model[k].parameters() for k in stage1_active_keys if k in model},
-        scheduler_params_dict={k: scheduler_params.copy() for k in stage1_active_keys if k in model},
+        {k: model[k].parameters() for k in stage1_train_keys if k in model},
+        scheduler_params_dict={k: scheduler_params.copy() for k in stage1_train_keys if k in model},
         lr=float(config["optimizer_params"].get("lr", 1e-4)),
     )
 
@@ -605,19 +618,22 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
             if gt.shape[-1] < 80:
                 continue
 
+            gt_in  = gt.unsqueeze(1)
+            wav_in = wav.unsqueeze(1)
+
             # F0 and style extraction
             with torch.no_grad():
-                real_norm        = log_norm(gt.unsqueeze(1)).squeeze(1).detach()
-                F0_real, _, _    = model["pitch_extractor"](gt.unsqueeze(1))
+                real_norm     = log_norm(gt_in).squeeze(1).detach()
+                F0_real, _, _ = model["pitch_extractor"](gt_in)
 
-            s = model["style_encoder"](gt.unsqueeze(1))  # acoustic style (training only)
+            s = model["style_encoder"](gt_in)  # acoustic style (training only)
 
             y_rec = model["decoder"](en, F0_real, real_norm, s)
 
             # ── Discriminator step ──────────────────────────────────────
             if epoch >= TMA_epoch:
                 optimizer.zero_grad(set_to_none=True)
-                d_loss = dl(wav.detach().unsqueeze(1).float(), y_rec.detach()).mean()
+                d_loss = dl(wav_in, y_rec.detach()).mean()
                 accelerator.backward(d_loss)
                 optimizer.step("msd")
                 optimizer.step("mpd")
@@ -626,16 +642,21 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
 
             # ── Generator step ──────────────────────────────────────────
             optimizer.zero_grad(set_to_none=True)
-            loss_mel = stft_loss(y_rec.squeeze(), wav.detach())
+            loss_mel = stft_loss(y_rec.squeeze(1), wav)
 
             if epoch >= TMA_epoch:
+                # Temporarily freeze discriminators so generator backward skips
+                # computing 8 sub-discriminator weight gradients (pure feature extractors).
+                for p in model["mpd"].parameters(): p.requires_grad = False
+                for p in model["msd"].parameters(): p.requires_grad = False
+
                 loss_s2s = sum(
                     F.cross_entropy(pred[:tl], txt[:tl])
                     for pred, txt, tl in zip(s2s_pred, texts, input_lengths)
                 ) / texts.size(0)
                 loss_mono    = F.l1_loss(s2s_attn, s2s_attn_mono) * 10
-                loss_gen_all = gl(wav.detach().unsqueeze(1).float(), y_rec).mean()
-                loss_slm     = wl(wav.detach(), y_rec).mean()
+                loss_gen_all = gl(wav_in, y_rec).mean()
+                loss_slm     = wl(wav, y_rec).mean()
                 g_loss = (
                     loss_params.lambda_mel  * loss_mel
                     + loss_params.lambda_mono * loss_mono
@@ -650,12 +671,16 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
             running_loss += accelerator.gather(loss_mel).mean().item()
             accelerator.backward(g_loss)
 
+            if epoch >= TMA_epoch:
+                # Re-enable discriminator gradients for next iteration's discriminator training
+                for p in model["mpd"].parameters(): p.requires_grad = True
+                for p in model["msd"].parameters(): p.requires_grad = True
+
             optimizer.step("text_encoder")
             optimizer.step("style_encoder")
             optimizer.step("decoder")
             if epoch >= TMA_epoch:
                 optimizer.step("text_aligner")
-                optimizer.step("pitch_extractor")
             optimizer.scheduler()
 
             iters += 1
