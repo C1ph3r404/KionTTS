@@ -355,7 +355,7 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
     # ── Protect against CUDA OOM on Colab T4 (15GB VRAM) ──
     if torch.cuda.is_available():
         vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)
-        if vram_gb < 14.0 and batch_size > 2:
+        if vram_gb < 16.0 and batch_size > 2:
             print(f"[*] Detected {vram_gb:.1f} GB VRAM (T4 / mid-VRAM GPU).")
             print(f"    Auto-clamping batch_size from {batch_size} -> 2 to prevent CUDA OutOfMemoryError.")
             batch_size = 2
