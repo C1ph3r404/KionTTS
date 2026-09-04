@@ -554,7 +554,6 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
             with accelerator.autocast():
                 # ASR aligner forward
                 # When epoch < TMA_epoch, text_aligner is frozen and no s2s/mono loss is backpropagated.
-                # Wrapping with no_grad() prevents saving huge ASR transformer attention activation graphs.
                 if epoch < TMA_epoch:
                     with torch.no_grad():
                         ppgs, s2s_pred, s2s_attn = model["text_aligner"](mels, mask, texts)
@@ -617,21 +616,24 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
                     F0_real, _, _    = model["pitch_extractor"](gt.unsqueeze(1))
 
                 s = model["style_encoder"](gt.unsqueeze(1))  # acoustic style (training only)
-
                 y_rec = model["decoder"](en, F0_real, real_norm, s)
 
-                # ── Discriminator step ──────────────────────────────────────
+                # ── Discriminator loss ──
                 if epoch >= TMA_epoch:
-                    optimizer.zero_grad()
                     d_loss = dl(wav.detach().unsqueeze(1).float(), y_rec.detach()).mean()
-                    accelerator.backward(d_loss)
-                    optimizer.step("msd")
-                    optimizer.step("mpd")
                 else:
-                    d_loss = 0
+                    d_loss = None
 
-                # ── Generator step ──────────────────────────────────────────
-                optimizer.zero_grad()
+            # ── Discriminator backward & step (OUTSIDE autocast) ──
+            if epoch >= TMA_epoch and d_loss is not None:
+                optimizer.zero_grad("msd")
+                optimizer.zero_grad("mpd")
+                accelerator.backward(d_loss)
+                optimizer.step("msd")
+                optimizer.step("mpd")
+
+            # ── Generator forward & loss (INSIDE autocast) ──
+            with accelerator.autocast():
                 loss_mel = stft_loss(y_rec.squeeze(), wav.detach())
 
                 if epoch >= TMA_epoch:
@@ -642,7 +644,7 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
 
                     loss_mono    = F.l1_loss(s2s_attn, s2s_attn_mono) * 10
                     loss_gen_all = gl(wav.detach().unsqueeze(1).float(), y_rec).mean()
-                    loss_slm     = wl(wav.detach(), y_rec).mean()
+                    loss_slm     = wl(wav.detach().float(), y_rec.float()).mean()
                     g_loss = (
                         loss_params.lambda_mel  * loss_mel
                         + loss_params.lambda_mono * loss_mono
@@ -654,21 +656,29 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
                     loss_s2s = loss_mono = loss_gen_all = loss_slm = 0
                     g_loss = loss_mel
 
-                running_loss += accelerator.gather(loss_mel).mean().item()
-                accelerator.backward(g_loss)
+            # ── Generator backward & step (OUTSIDE autocast) ──
+            optimizer.zero_grad("text_encoder")
+            optimizer.zero_grad("style_encoder")
+            optimizer.zero_grad("decoder")
+            if epoch >= TMA_epoch:
+                optimizer.zero_grad("text_aligner")
+                optimizer.zero_grad("pitch_extractor")
 
-                optimizer.step("text_encoder")
-                optimizer.step("style_encoder")
-                optimizer.step("decoder")
-                if epoch >= TMA_epoch:
-                    optimizer.step("text_aligner")
-                    optimizer.step("pitch_extractor")
+            running_loss += accelerator.gather(loss_mel).mean().item()
+            accelerator.backward(g_loss)
 
-                # Step learning rate schedulers
-                optimizer.scheduler()
+            optimizer.step("text_encoder")
+            optimizer.step("style_encoder")
+            optimizer.step("decoder")
+            if epoch >= TMA_epoch:
+                optimizer.step("text_aligner")
+                optimizer.step("pitch_extractor")
+
+            # Step learning rate schedulers
+            optimizer.scheduler()
 
             iters += 1
-            _to_num = lambda v: float(v.item()) if hasattr(v, "item") else float(v)
+            _to_num = lambda v: float(v.item()) if hasattr(v, "item") else (float(v) if v is not None else 0.0)
 
             pbar.set_postfix(
                 step=iters,
