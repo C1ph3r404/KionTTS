@@ -362,7 +362,11 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
         if vram_gb < 20.0 and max_len > 200:
             print(f"    Auto-clamping max_len from {max_len} -> 200 frames for memory safety.")
             max_len = 200
-        torch.backends.cudnn.benchmark = True
+        # benchmark=False prevents algorithm re-searching on variable audio shapes.
+        # allow_tf32=True gives free Tensor Core speedup on Ampere+ GPUs.
+        torch.backends.cudnn.benchmark        = False
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32       = True
 
     data_params = config["data_params"]
     train_list, val_list = get_data_path_list(
@@ -436,7 +440,7 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
     stage1_active_keys = [
         "text_encoder", "style_encoder", "decoder",
         "text_aligner", "pitch_extractor",
-        "mpd", "msd", "wd"
+        "mpd", "msd"
     ]
 
     for k in model:
@@ -504,6 +508,11 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
         sr,
         model_params.slm.sr,
     ).to(device)
+    # Freeze WavLM backbone: inputs (y_rec) receive gradients to train the decoder,
+    # but 95M WavLM weights skip gradient computation, cutting SLM backward latency ~50%.
+    for param in wl.parameters():
+        param.requires_grad = False
+    wl.eval()
 
     print(f"\n  Starting training from epoch {start_epoch + 1}...")
     torch.cuda.empty_cache()
@@ -578,10 +587,9 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
 
             # Build random clips
             mel_input_length_all = accelerator.gather(mel_input_length)
-            mel_len    = min(int(mel_input_length_all.min().item() / 2 - 1), max_len // 2)
-            mel_len_st = int(mel_input_length.min().item() / 2 - 1)
+            mel_len = min(int(mel_input_length_all.min().item() / 2 - 1), max_len // 2)
 
-            en, gt, wav, st = [], [], [], []
+            en, gt, wav = [], [], []
             for bib in range(len(mel_input_length)):
                 mel_length = int(mel_input_length[bib].item() / 2)
                 rs = np.random.randint(0, mel_length - mel_len)
@@ -589,12 +597,9 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
                 gt.append(mels[bib, :, rs * 2:(rs + mel_len) * 2])
                 y = waves[bib][rs * 2 * 300:(rs + mel_len) * 2 * 300]
                 wav.append(torch.from_numpy(y).to(device, non_blocking=True))
-                rs2 = np.random.randint(0, mel_length - mel_len_st)
-                st.append(mels[bib, :, rs2 * 2:(rs2 + mel_len_st) * 2])
 
             en  = torch.stack(en)
             gt  = torch.stack(gt).detach()
-            st  = torch.stack(st).detach()
             wav = torch.stack(wav).float().detach()
 
             if gt.shape[-1] < 80:
@@ -611,7 +616,7 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
 
             # ── Discriminator step ──────────────────────────────────────
             if epoch >= TMA_epoch:
-                optimizer.zero_grad()
+                optimizer.zero_grad(set_to_none=True)
                 d_loss = dl(wav.detach().unsqueeze(1).float(), y_rec.detach()).mean()
                 accelerator.backward(d_loss)
                 optimizer.step("msd")
@@ -620,7 +625,7 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
                 d_loss = 0
 
             # ── Generator step ──────────────────────────────────────────
-            optimizer.zero_grad()
+            optimizer.zero_grad(set_to_none=True)
             loss_mel = stft_loss(y_rec.squeeze(), wav.detach())
 
             if epoch >= TMA_epoch:
@@ -651,6 +656,7 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
             if epoch >= TMA_epoch:
                 optimizer.step("text_aligner")
                 optimizer.step("pitch_extractor")
+            optimizer.scheduler()
 
             iters += 1
             _to_num = lambda v: float(v.item()) if hasattr(v, "item") else float(v)

@@ -38,7 +38,7 @@ def auto_batch_size():
         vram = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)
         if vram >= 38:   return 16   # A100 40GB
         elif vram >= 22: return 8    # RTX 3090 / 4090 / A10G (24GB)
-        elif vram >= 14: return 4    # T4 / V100 (15GB/16GB) — StyleTTS2 vocoder requires bs=2 on T4
+        elif vram >= 14: return 4    # T4 / V100 (15GB/16GB) — StyleTTS2 vocoder requires bs=4 on T4
         else:            return 2
     except Exception:
         return 2
