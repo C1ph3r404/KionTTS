@@ -635,11 +635,10 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
                 loss_mel = stft_loss(y_rec.squeeze(), wav.detach())
 
                 if epoch >= TMA_epoch:
-                    # Vectorized batched S2S cross-entropy
-                    loss_s2s = F.cross_entropy(
-                        s2s_pred.transpose(1, 2), texts, reduction="none"
-                    )
-                    loss_s2s = (loss_s2s * text_mask).sum() / text_mask.sum().clamp(min=1)
+                    loss_s2s = sum(
+                        F.cross_entropy(pred[:tl], txt[:tl])
+                        for pred, txt, tl in zip(s2s_pred, texts, input_lengths)
+                    ) / texts.size(0)
 
                     loss_mono    = F.l1_loss(s2s_attn, s2s_attn_mono) * 10
                     loss_gen_all = gl(wav.detach().unsqueeze(1).float(), y_rec).mean()
