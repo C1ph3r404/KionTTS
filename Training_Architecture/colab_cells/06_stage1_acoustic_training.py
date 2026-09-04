@@ -518,6 +518,9 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
     # ──────────────────────────────────────────────────────────────────────────
     # 11. Training Loop
     # ──────────────────────────────────────────────────────────────────────────
+    # ── Diagnostic flag: set False after identifying the stall point ──
+    _DBG = True
+
     for epoch in range(start_epoch, epochs):
         epoch_start = time.time()
         running_loss = 0.0
@@ -540,9 +543,11 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
             if i >= remaining_steps:
                 break
 
+            if _DBG and i == 0: print(f"[DBG i=0] batch received from dataloader", flush=True)
             waves = batch[0]
             batch = [b.to(device, non_blocking=True) for b in batch[1:]]
             texts, input_lengths, _, _, mels, mel_input_length, _ = batch
+            if _DBG and i == 0: print(f"[DBG i=0] batch unpacked → mels {mels.shape}", flush=True)
 
             with torch.no_grad():
                 mask      = length_to_mask(mel_input_length // (2 ** n_down)).to(device)
@@ -556,8 +561,10 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
                     ppgs, s2s_pred, s2s_attn = model["text_aligner"](mels, mask, texts)
                     s2s_attn = s2s_attn.transpose(-1, -2)[..., 1:].transpose(-1, -2)
             else:
+                if _DBG and i == 0: print("[DBG i=0] text_aligner forward...", flush=True)
                 ppgs, s2s_pred, s2s_attn = model["text_aligner"](mels, mask, texts)
                 s2s_attn = s2s_attn.transpose(-1, -2)[..., 1:].transpose(-1, -2)
+                if _DBG and i == 0: print("[DBG i=0] text_aligner done", flush=True)
 
             with torch.no_grad():
                 attn_mask = (
@@ -573,18 +580,23 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
                 attn_mask  = attn_mask < 1
             s2s_attn.masked_fill_(attn_mask, 0.0)
 
+            if _DBG and i == 0: print("[DBG i=0] maximum_path...", flush=True)
             with torch.no_grad():
                 mask_ST       = mask_from_lens(s2s_attn, input_lengths, mel_input_length // (2 ** n_down))
                 s2s_attn_mono = maximum_path(s2s_attn, mask_ST)
+            if _DBG and i == 0: print("[DBG i=0] maximum_path done", flush=True)
 
             # Text encode
+            if _DBG and i == 0: print("[DBG i=0] text_encoder...", flush=True)
             t_en = model["text_encoder"](texts, input_lengths, text_mask)
+            if _DBG and i == 0: print("[DBG i=0] text_encoder done; accelerator.gather...", flush=True)
 
             # 50/50 soft vs monotonic alignment
             asr = (t_en @ s2s_attn) if random.getrandbits(1) else (t_en @ s2s_attn_mono)
 
             # Build random clips
             mel_input_length_all = accelerator.gather(mel_input_length)
+            if _DBG and i == 0: print(f"[DBG i=0] gather done → mel_len will be {min(int(mel_input_length_all.min().item()/2-1), max_len//2)}", flush=True)
             mel_len    = min(int(mel_input_length_all.min().item() / 2 - 1), max_len // 2)
             mel_len_st = int(mel_input_length.min().item() / 2 - 1)
 
@@ -608,9 +620,11 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
                 continue
 
             # F0 and style extraction (always no_grad — fixed inputs)
+            if _DBG and i == 0: print(f"[DBG i=0] clips built → gt {gt.shape}, wav {wav.shape}; pitch_extractor...", flush=True)
             with torch.no_grad():
                 real_norm        = log_norm(gt.unsqueeze(1)).squeeze(1).detach()
                 F0_real, _, _    = model["pitch_extractor"](gt.unsqueeze(1))
+            if _DBG and i == 0: print("[DBG i=0] pitch_extractor done; entering autocast block...", flush=True)
 
             # ── Single unified forward + loss block ────────────────────────
             # ONE autocast context for all ops so the backward graph is fully
@@ -621,11 +635,15 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
             # the discriminator's forward graph does NOT coexist in VRAM with
             # the full generator graph — this was the source of the batch-4 OOM.
             with accelerator.autocast():
+                if _DBG and i == 0: print("[DBG i=0] style_encoder...", flush=True)
                 s     = model["style_encoder"](gt.unsqueeze(1))
+                if _DBG and i == 0: print("[DBG i=0] decoder...", flush=True)
                 y_rec = model["decoder"](en, F0_real, real_norm, s)
+                if _DBG and i == 0: print(f"[DBG i=0] decoder done → y_rec {y_rec.shape} {y_rec.dtype}; stft_loss...", flush=True)
 
                 # Generator losses
                 loss_mel = stft_loss(y_rec.squeeze(), wav.detach())
+                if _DBG and i == 0: print("[DBG i=0] stft_loss done", flush=True)
 
                 if epoch >= TMA_epoch:
                     loss_s2s = sum(
@@ -633,9 +651,12 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
                         for pred, txt, tl in zip(s2s_pred, texts, input_lengths)
                     ) / texts.size(0)
                     loss_mono    = F.l1_loss(s2s_attn, s2s_attn_mono) * 10
+                    if _DBG and i == 0: print("[DBG i=0] gen discriminator loss gl()...", flush=True)
                     loss_gen_all = gl(wav.detach().unsqueeze(1).float(), y_rec).mean()
                     # .float(): WavLM backbone is frozen in fp32 and expects fp32 input
+                    if _DBG and i == 0: print("[DBG i=0] WavLM loss wl()...", flush=True)
                     loss_slm     = wl(wav.detach().float(), y_rec.float()).mean()
+                    if _DBG and i == 0: print("[DBG i=0] wl() done", flush=True)
                     g_loss = (
                         loss_params.lambda_mel  * loss_mel
                         + loss_params.lambda_mono * loss_mono
@@ -650,7 +671,9 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
             # Disc loss outside autocast: y_rec.detach() breaks the gen graph so
             # only the disc forward (msd/mpd) tensors are live here — not y_rec's graph.
             if epoch >= TMA_epoch:
-                d_loss = dl(wav.detach().unsqueeze(1).float(), y_rec.detach()).mean()
+                if _DBG and i == 0: print("[DBG i=0] disc loss dl()...", flush=True)
+                d_loss = dl(wav.detach().unsqueeze(1).float(), y_rec.detach().float()).mean()
+                if _DBG and i == 0: print("[DBG i=0] dl() done", flush=True)
             else:
                 d_loss = 0
 
