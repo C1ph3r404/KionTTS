@@ -330,7 +330,6 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
     accelerator = Accelerator(
         project_dir=log_dir,
         split_batches=True,
-        mixed_precision="fp16",          # FP16 for Colab T4 efficiency
         kwargs_handlers=[ddp_kwargs],
     )
     device = accelerator.device
@@ -550,119 +549,112 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
                 mask      = length_to_mask(mel_input_length // (2 ** n_down)).to(device)
                 text_mask = length_to_mask(input_lengths).to(device)
 
-            # ── Mixed Precision Autocast for Forward & Loss Passes ───────────
-            with accelerator.autocast():
-                # ASR aligner forward
-                # When epoch < TMA_epoch, text_aligner is frozen and no s2s/mono loss is backpropagated.
-                if epoch < TMA_epoch:
-                    with torch.no_grad():
-                        ppgs, s2s_pred, s2s_attn = model["text_aligner"](mels, mask, texts)
-                        s2s_attn = s2s_attn.transpose(-1, -2)[..., 1:].transpose(-1, -2)
-                else:
+            # ASR aligner forward
+            # When epoch < TMA_epoch, text_aligner is frozen and no s2s/mono loss is backpropagated.
+            if epoch < TMA_epoch:
+                with torch.no_grad():
                     ppgs, s2s_pred, s2s_attn = model["text_aligner"](mels, mask, texts)
                     s2s_attn = s2s_attn.transpose(-1, -2)[..., 1:].transpose(-1, -2)
+            else:
+                ppgs, s2s_pred, s2s_attn = model["text_aligner"](mels, mask, texts)
+                s2s_attn = s2s_attn.transpose(-1, -2)[..., 1:].transpose(-1, -2)
 
-                with torch.no_grad():
-                    attn_mask = (
-                        (~mask).unsqueeze(-1)
-                        .expand(mask.shape[0], mask.shape[1], text_mask.shape[-1])
-                        .float()
-                        .transpose(-1, -2)
-                    ) * (
-                        (~text_mask).unsqueeze(-1)
-                        .expand(*text_mask.shape, mask.shape[-1])
-                        .float()
-                    )
-                    attn_mask  = attn_mask < 1
-                s2s_attn.masked_fill_(attn_mask, 0.0)
+            with torch.no_grad():
+                attn_mask = (
+                    (~mask).unsqueeze(-1)
+                    .expand(mask.shape[0], mask.shape[1], text_mask.shape[-1])
+                    .float()
+                    .transpose(-1, -2)
+                ) * (
+                    (~text_mask).unsqueeze(-1)
+                    .expand(*text_mask.shape, mask.shape[-1])
+                    .float()
+                )
+                attn_mask  = attn_mask < 1
+            s2s_attn.masked_fill_(attn_mask, 0.0)
 
-                with torch.no_grad():
-                    mask_ST       = mask_from_lens(s2s_attn, input_lengths, mel_input_length // (2 ** n_down))
-                    s2s_attn_mono = maximum_path(s2s_attn, mask_ST)
+            with torch.no_grad():
+                mask_ST       = mask_from_lens(s2s_attn, input_lengths, mel_input_length // (2 ** n_down))
+                s2s_attn_mono = maximum_path(s2s_attn, mask_ST)
 
-                # Text encode
-                t_en = model["text_encoder"](texts, input_lengths, text_mask)
+            # Text encode
+            t_en = model["text_encoder"](texts, input_lengths, text_mask)
 
-                # 50/50 soft vs monotonic alignment
-                asr = (t_en @ s2s_attn) if random.getrandbits(1) else (t_en @ s2s_attn_mono)
+            # 50/50 soft vs monotonic alignment
+            asr = (t_en @ s2s_attn) if random.getrandbits(1) else (t_en @ s2s_attn_mono)
 
-                # Build random clips
-                mel_input_length_all = accelerator.gather(mel_input_length)
-                mel_len    = min(int(mel_input_length_all.min().item() / 2 - 1), max_len // 2)
-                mel_len_st = int(mel_input_length.min().item() / 2 - 1)
+            # Build random clips
+            mel_input_length_all = accelerator.gather(mel_input_length)
+            mel_len    = min(int(mel_input_length_all.min().item() / 2 - 1), max_len // 2)
+            mel_len_st = int(mel_input_length.min().item() / 2 - 1)
 
-                en, gt, wav, st = [], [], [], []
-                for bib in range(len(mel_input_length)):
-                    mel_length = int(mel_input_length[bib].item() / 2)
-                    rs = np.random.randint(0, mel_length - mel_len)
-                    en.append(asr[bib, :, rs:rs + mel_len])
-                    gt.append(mels[bib, :, rs * 2:(rs + mel_len) * 2])
-                    y = waves[bib][rs * 2 * 300:(rs + mel_len) * 2 * 300]
-                    wav.append(torch.from_numpy(y).to(device, non_blocking=True))
-                    rs2 = np.random.randint(0, mel_length - mel_len_st)
-                    st.append(mels[bib, :, rs2 * 2:(rs2 + mel_len_st) * 2])
+            en, gt, wav, st = [], [], [], []
+            for bib in range(len(mel_input_length)):
+                mel_length = int(mel_input_length[bib].item() / 2)
+                rs = np.random.randint(0, mel_length - mel_len)
+                en.append(asr[bib, :, rs:rs + mel_len])
+                gt.append(mels[bib, :, rs * 2:(rs + mel_len) * 2])
+                y = waves[bib][rs * 2 * 300:(rs + mel_len) * 2 * 300]
+                wav.append(torch.from_numpy(y).to(device, non_blocking=True))
+                rs2 = np.random.randint(0, mel_length - mel_len_st)
+                st.append(mels[bib, :, rs2 * 2:(rs2 + mel_len_st) * 2])
 
-                en  = torch.stack(en)
-                gt  = torch.stack(gt).detach()
-                st  = torch.stack(st).detach()
-                wav = torch.stack(wav).float().detach()
+            en  = torch.stack(en)
+            gt  = torch.stack(gt).detach()
+            st  = torch.stack(st).detach()
+            wav = torch.stack(wav).float().detach()
 
-                if gt.shape[-1] < 80:
-                    continue
+            if gt.shape[-1] < 80:
+                continue
 
-                # F0 and style extraction
-                with torch.no_grad():
-                    real_norm        = log_norm(gt.unsqueeze(1)).squeeze(1).detach()
-                    F0_real, _, _    = model["pitch_extractor"](gt.unsqueeze(1))
+            # F0 and style extraction
+            with torch.no_grad():
+                real_norm        = log_norm(gt.unsqueeze(1)).squeeze(1).detach()
+                F0_real, _, _    = model["pitch_extractor"](gt.unsqueeze(1))
 
-                s = model["style_encoder"](gt.unsqueeze(1))  # acoustic style (training only)
-                y_rec = model["decoder"](en, F0_real, real_norm, s)
+            s = model["style_encoder"](gt.unsqueeze(1))  # acoustic style (training only)
+            y_rec = model["decoder"](en, F0_real, real_norm, s)
 
-                # ── Discriminator loss ──
-                if epoch >= TMA_epoch:
-                    d_loss = dl(wav.detach().unsqueeze(1).float(), y_rec.detach()).mean()
-                else:
-                    d_loss = None
-
-            # ── Discriminator backward & step (OUTSIDE autocast) ──
-            if epoch >= TMA_epoch and d_loss is not None:
+            # ── Discriminator step ──
+            if epoch >= TMA_epoch:
                 optimizer.zero_grad("msd")
                 optimizer.zero_grad("mpd")
+                d_loss = dl(wav.detach().unsqueeze(1).float(), y_rec.detach()).mean()
                 accelerator.backward(d_loss)
                 optimizer.step("msd")
                 optimizer.step("mpd")
+            else:
+                d_loss = 0
 
-            # ── Generator forward & loss (INSIDE autocast) ──
-            with accelerator.autocast():
-                loss_mel = stft_loss(y_rec.squeeze(), wav.detach())
-
-                if epoch >= TMA_epoch:
-                    loss_s2s = sum(
-                        F.cross_entropy(pred[:tl], txt[:tl])
-                        for pred, txt, tl in zip(s2s_pred, texts, input_lengths)
-                    ) / texts.size(0)
-
-                    loss_mono    = F.l1_loss(s2s_attn, s2s_attn_mono) * 10
-                    loss_gen_all = gl(wav.detach().unsqueeze(1).float(), y_rec).mean()
-                    loss_slm     = wl(wav.detach().float(), y_rec.float()).mean()
-                    g_loss = (
-                        loss_params.lambda_mel  * loss_mel
-                        + loss_params.lambda_mono * loss_mono
-                        + loss_params.lambda_s2s  * loss_s2s
-                        + loss_params.lambda_gen  * loss_gen_all
-                        + loss_params.lambda_slm  * loss_slm
-                    )
-                else:
-                    loss_s2s = loss_mono = loss_gen_all = loss_slm = 0
-                    g_loss = loss_mel
-
-            # ── Generator backward & step (OUTSIDE autocast) ──
+            # ── Generator step ──
             optimizer.zero_grad("text_encoder")
             optimizer.zero_grad("style_encoder")
             optimizer.zero_grad("decoder")
             if epoch >= TMA_epoch:
                 optimizer.zero_grad("text_aligner")
                 optimizer.zero_grad("pitch_extractor")
+
+            loss_mel = stft_loss(y_rec.squeeze(), wav.detach())
+
+            if epoch >= TMA_epoch:
+                loss_s2s = sum(
+                    F.cross_entropy(pred[:tl], txt[:tl])
+                    for pred, txt, tl in zip(s2s_pred, texts, input_lengths)
+                ) / texts.size(0)
+
+                loss_mono    = F.l1_loss(s2s_attn, s2s_attn_mono) * 10
+                loss_gen_all = gl(wav.detach().unsqueeze(1).float(), y_rec).mean()
+                loss_slm     = wl(wav.detach(), y_rec).mean()
+                g_loss = (
+                    loss_params.lambda_mel  * loss_mel
+                    + loss_params.lambda_mono * loss_mono
+                    + loss_params.lambda_s2s  * loss_s2s
+                    + loss_params.lambda_gen  * loss_gen_all
+                    + loss_params.lambda_slm  * loss_slm
+                )
+            else:
+                loss_s2s = loss_mono = loss_gen_all = loss_slm = 0
+                g_loss = loss_mel
 
             running_loss += accelerator.gather(loss_mel).mean().item()
             accelerator.backward(g_loss)
@@ -709,7 +701,7 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
         loss_test = 0.0
         iters_test = 0
 
-        with torch.no_grad(), accelerator.autocast():
+        with torch.no_grad():
             for batch in val_dataloader:
                 waves = batch[0]
                 batch = [b.to(device, non_blocking=True) for b in batch[1:]]
