@@ -668,7 +668,7 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
                 loss_s2s = loss_mono = loss_gen_all = loss_slm = 0
                 g_loss = loss_mel
 
-            running_loss += accelerator.gather(loss_mel).mean().item()
+            running_loss += loss_mel.detach()
             accelerator.backward(g_loss)
 
             if epoch >= TMA_epoch:
@@ -686,25 +686,29 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
             iters += 1
             _to_num = lambda v: float(v.item()) if hasattr(v, "item") else float(v)
 
-            pbar.set_postfix(
-                step=iters,
-                mel=f"{_to_num(loss_mel):.4f}",
-                gen=f"{_to_num(loss_gen_all):.4f}",
-            )
+            # Update progress bar every log_interval steps (or initial step) to eliminate
+            # blocking CPU-GPU synchronization barriers (.item()) on every single iteration.
+            if (i + 1) % log_interval == 0 or i == 0:
+                pbar.set_postfix(
+                    step=iters,
+                    mel=f"{_to_num(loss_mel):.4f}",
+                    gen=f"{_to_num(loss_gen_all):.4f}",
+                )
 
             # ── Checkpoint every save_step_interval (1000) steps ──
             if iters % save_step_interval == 0 and accelerator.is_main_process:
+                current_running = accelerator.gather(running_loss).mean().item() if hasattr(running_loss, "item") else float(running_loss)
                 state = {
                     "net":       {k: accelerator.unwrap_model(model[k]).state_dict() for k in model},
                     "optimizer": optimizer.state_dict(),
                     "iters":     iters,
-                    "val_loss":  running_loss / max((i % log_interval) + 1, 1),
+                    "val_loss":  current_running / max((i % log_interval) + 1, 1),
                     "epoch":     epoch,  # In-progress epoch
                 }
                 _save_to_drive(state, epoch=epoch + 1, step=iters)
 
             if (i + 1) % log_interval == 0 and accelerator.is_main_process:
-                avg = running_loss / log_interval
+                avg = accelerator.gather(running_loss).mean().item() / log_interval
                 writer.add_scalar("train/mel_loss",  avg,                  iters)
                 writer.add_scalar("train/gen_loss",  _to_num(loss_gen_all), iters)
                 writer.add_scalar("train/disc_loss", _to_num(d_loss),     iters)

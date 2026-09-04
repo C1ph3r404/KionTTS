@@ -47,9 +47,9 @@ class STFTLoss(torch.nn.Module):
         mean, std = -4, 4
         x_mag = (torch.log(1e-5 + x_mag) - mean) / std
         
-        y_mag = self.to_mel(y)
-        mean, std = -4, 4
-        y_mag = (torch.log(1e-5 + y_mag) - mean) / std
+        with torch.no_grad():
+            y_mag = self.to_mel(y)
+            y_mag = (torch.log(1e-5 + y_mag) - mean) / std
         
         sc_loss = self.spectral_convergenge_loss(x_mag, y_mag)    
         return sc_loss
@@ -228,13 +228,11 @@ class WavLMLoss(torch.nn.Module):
             wav_16 = self.resample(wav)
             wav_embeddings = self.wavlm(input_values=wav_16, output_hidden_states=True).hidden_states
         y_rec_16 = self.resample(y_rec)
-        y_rec_embeddings = self.wavlm(input_values=y_rec_16.squeeze(), output_hidden_states=True).hidden_states
+        y_rec_embeddings = self.wavlm(input_values=y_rec_16.squeeze(1), output_hidden_states=True).hidden_states
 
-        floss = 0
-        for er, eg in zip(wav_embeddings, y_rec_embeddings):
-            floss += torch.mean(torch.abs(er - eg))
-        
-        return floss.mean()
+        wav_stack = torch.stack(wav_embeddings, dim=0)
+        y_rec_stack = torch.stack(y_rec_embeddings, dim=0)
+        return torch.mean(torch.abs(wav_stack - y_rec_stack)) * len(wav_embeddings)
     
     def generator(self, y_rec):
         y_rec_16 = self.resample(y_rec)
