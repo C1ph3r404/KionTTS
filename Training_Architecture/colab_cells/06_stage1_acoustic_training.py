@@ -600,47 +600,64 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
             if gt.shape[-1] < 80:
                 continue
 
-            # F0 and style extraction
+            # F0 and style extraction (always no_grad — fixed inputs)
             with torch.no_grad():
                 real_norm        = log_norm(gt.unsqueeze(1)).squeeze(1).detach()
                 F0_real, _, _    = model["pitch_extractor"](gt.unsqueeze(1))
 
-            s = model["style_encoder"](gt.unsqueeze(1))  # acoustic style (training only)
+            # ── Single unified forward + loss block ────────────────────────
+            # ONE autocast context for all ops so the backward graph is fully
+            # self-consistent. Splitting y_rec across multiple autocast blocks
+            # causes "FIND was unable to find an engine" on iSTFTNet backward.
+            with accelerator.autocast():
+                s     = model["style_encoder"](gt.unsqueeze(1))
+                y_rec = model["decoder"](en, F0_real, real_norm, s)
 
-            y_rec = model["decoder"](en, F0_real, real_norm, s)
+                # Disc loss: y_rec.detach() breaks the graph — safe to backward later
+                if epoch >= TMA_epoch:
+                    d_loss = dl(wav.detach().unsqueeze(1).float(), y_rec.detach()).mean()
 
-            # ── Discriminator step ──────────────────────────────────────
+                # Generator losses
+                loss_mel = stft_loss(y_rec.squeeze(), wav.detach())
+
+                if epoch >= TMA_epoch:
+                    loss_s2s = sum(
+                        F.cross_entropy(pred[:tl], txt[:tl])
+                        for pred, txt, tl in zip(s2s_pred, texts, input_lengths)
+                    ) / texts.size(0)
+                    loss_mono    = F.l1_loss(s2s_attn, s2s_attn_mono) * 10
+                    loss_gen_all = gl(wav.detach().unsqueeze(1).float(), y_rec).mean()
+                    # .float(): WavLM backbone is frozen in fp32 and expects fp32 input
+                    loss_slm     = wl(wav.detach().float(), y_rec.float()).mean()
+                    g_loss = (
+                        loss_params.lambda_mel  * loss_mel
+                        + loss_params.lambda_mono * loss_mono
+                        + loss_params.lambda_s2s  * loss_s2s
+                        + loss_params.lambda_gen  * loss_gen_all
+                        + loss_params.lambda_slm  * loss_slm
+                    )
+                else:
+                    loss_s2s = loss_mono = loss_gen_all = loss_slm = 0
+                    d_loss   = 0
+                    g_loss   = loss_mel
+
+            # ── Discriminator backward ─────────────────────────────────────
+            # d_loss used y_rec.detach() → backward only touches msd/mpd/wd
             if epoch >= TMA_epoch:
-                optimizer.zero_grad()
-                d_loss = dl(wav.detach().unsqueeze(1).float(), y_rec.detach()).mean()
+                optimizer.zero_grad("msd")
+                optimizer.zero_grad("mpd")
+                optimizer.zero_grad("wd")
                 accelerator.backward(d_loss)
                 optimizer.step("msd")
                 optimizer.step("mpd")
-            else:
-                d_loss = 0
 
-            # ── Generator step ──────────────────────────────────────────
-            optimizer.zero_grad()
-            loss_mel = stft_loss(y_rec.squeeze(), wav.detach())
-
+            # ── Generator backward ─────────────────────────────────────────
+            optimizer.zero_grad("text_encoder")
+            optimizer.zero_grad("style_encoder")
+            optimizer.zero_grad("decoder")
             if epoch >= TMA_epoch:
-                loss_s2s = sum(
-                    F.cross_entropy(pred[:tl], txt[:tl])
-                    for pred, txt, tl in zip(s2s_pred, texts, input_lengths)
-                ) / texts.size(0)
-                loss_mono    = F.l1_loss(s2s_attn, s2s_attn_mono) * 10
-                loss_gen_all = gl(wav.detach().unsqueeze(1).float(), y_rec).mean()
-                loss_slm     = wl(wav.detach(), y_rec).mean()
-                g_loss = (
-                    loss_params.lambda_mel  * loss_mel
-                    + loss_params.lambda_mono * loss_mono
-                    + loss_params.lambda_s2s  * loss_s2s
-                    + loss_params.lambda_gen  * loss_gen_all
-                    + loss_params.lambda_slm  * loss_slm
-                )
-            else:
-                loss_s2s = loss_mono = loss_gen_all = loss_slm = 0
-                g_loss = loss_mel
+                optimizer.zero_grad("text_aligner")
+                optimizer.zero_grad("pitch_extractor")
 
             running_loss += accelerator.gather(loss_mel).mean().item()
             accelerator.backward(g_loss)
