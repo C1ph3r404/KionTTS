@@ -575,17 +575,7 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
                 s2s_attn = s2s_attn.transpose(-1, -2)[..., 1:].transpose(-1, -2)
 
             with torch.no_grad():
-                attn_mask = (
-                    (~mask).unsqueeze(-1)
-                    .expand(mask.shape[0], mask.shape[1], text_mask.shape[-1])
-                    .float()
-                    .transpose(-1, -2)
-                ) * (
-                    (~text_mask).unsqueeze(-1)
-                    .expand(*text_mask.shape, mask.shape[-1])
-                    .float()
-                )
-                attn_mask  = attn_mask < 1
+                attn_mask = text_mask.unsqueeze(2) | mask.unsqueeze(1)
             s2s_attn.masked_fill_(attn_mask, 0.0)
 
             with torch.no_grad():
@@ -599,12 +589,16 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
             asr = (t_en @ s2s_attn) if random.getrandbits(1) else (t_en @ s2s_attn_mono)
 
             # Build random clips
-            mel_input_length_all = accelerator.gather(mel_input_length)
-            mel_len = min(int(mel_input_length_all.min().item() / 2 - 1), max_len // 2)
+            mel_lens_cpu = mel_input_length.tolist()
+            if accelerator.num_processes > 1:
+                min_mel_len = min(accelerator.gather(mel_input_length).tolist())
+            else:
+                min_mel_len = min(mel_lens_cpu)
+            mel_len = min(min_mel_len // 2 - 1, max_len // 2)
 
             en, gt, wav = [], [], []
-            for bib in range(len(mel_input_length)):
-                mel_length = int(mel_input_length[bib].item() / 2)
+            for bib, ml_raw in enumerate(mel_lens_cpu):
+                mel_length = ml_raw // 2
                 rs = np.random.randint(0, mel_length - mel_len)
                 en.append(asr[bib, :, rs:rs + mel_len])
                 gt.append(mels[bib, :, rs * 2:(rs + mel_len) * 2])
@@ -650,9 +644,10 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
                 for p in model["mpd"].parameters(): p.requires_grad = False
                 for p in model["msd"].parameters(): p.requires_grad = False
 
+                input_lens_cpu = input_lengths.tolist()
                 loss_s2s = sum(
                     F.cross_entropy(pred[:tl], txt[:tl])
-                    for pred, txt, tl in zip(s2s_pred, texts, input_lengths)
+                    for pred, txt, tl in zip(s2s_pred, texts, input_lens_cpu)
                 ) / texts.size(0)
                 loss_mono    = F.l1_loss(s2s_attn, s2s_attn_mono) * 10
                 loss_gen_all = gl(wav_in, y_rec).mean()
@@ -716,7 +711,7 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
 
         # ── Validation ────────────────────────────────────────────────────
         _ = [model[k].eval() for k in stage1_active_keys if k in model]
-        loss_test = 0.0
+        loss_test = torch.tensor(0.0, device=device)
         iters_test = 0
 
         with torch.no_grad(), accelerator.autocast():
@@ -733,10 +728,11 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
                 t_en = model["text_encoder"](texts, input_lengths, text_mask)
                 asr  = t_en @ s2s_attn
 
-                mel_len = min(int(mel_input_length.min().item() / 2 - 1), max_len // 2)
+                mel_lens_cpu = mel_input_length.tolist()
+                mel_len = min(min(mel_lens_cpu) // 2 - 1, max_len // 2)
                 en, gt, wav = [], [], []
-                for bib in range(len(mel_input_length)):
-                    ml = int(mel_input_length[bib].item() / 2)
+                for bib, ml_raw in enumerate(mel_lens_cpu):
+                    ml = ml_raw // 2
                     rs = np.random.randint(0, ml - mel_len)
                     en.append(asr[bib, :, rs:rs + mel_len])
                     gt.append(mels[bib, :, rs * 2:(rs + mel_len) * 2])
@@ -747,17 +743,18 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
                 gt  = torch.stack(gt).detach()
                 wav = torch.stack(wav).float().detach()
 
-                F0_real, _, _ = model["pitch_extractor"](gt.unsqueeze(1))
-                s             = model["style_encoder"](gt.unsqueeze(1))
-                real_norm     = log_norm(gt.unsqueeze(1)).squeeze(1)
+                gt_in         = gt.unsqueeze(1)
+                F0_real, _, _ = model["pitch_extractor"](gt_in)
+                s             = model["style_encoder"](gt_in)
+                real_norm     = log_norm(gt_in).squeeze(1)
                 y_rec         = model["decoder"](en, F0_real, real_norm, s)
-                loss_mel      = stft_loss(y_rec.squeeze(), wav.detach())
-                loss_test    += accelerator.gather(loss_mel).mean().item()
+                loss_mel      = stft_loss(y_rec.squeeze(1), wav.detach())
+                loss_test    += loss_mel.detach()
                 iters_test   += 1
 
         torch.cuda.empty_cache()
 
-        val_loss = loss_test / max(iters_test, 1)
+        val_loss = (accelerator.gather(loss_test / max(iters_test, 1)).mean()).item()
         is_best  = val_loss < best_loss
         if is_best:
             best_loss = val_loss
