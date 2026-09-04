@@ -612,14 +612,17 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
                 real_norm        = log_norm(gt.unsqueeze(1)).squeeze(1).detach()
                 F0_real, _, _    = model["pitch_extractor"](gt.unsqueeze(1))
 
-            s = model["style_encoder"](gt.unsqueeze(1))  # acoustic style (training only)
-            y_rec = model["decoder"](en, F0_real, real_norm, s)
+            with accelerator.autocast():
+                s = model["style_encoder"](gt.unsqueeze(1))  # acoustic style (training only)
+                y_rec = model["decoder"](en, F0_real, real_norm, s)
 
             # ── Discriminator step ──
             if epoch >= TMA_epoch:
                 optimizer.zero_grad("msd")
                 optimizer.zero_grad("mpd")
-                d_loss = dl(wav.detach().unsqueeze(1).float(), y_rec.detach()).mean()
+                optimizer.zero_grad("wd")  # prevent grad accumulation in SLM head
+                with accelerator.autocast():
+                    d_loss = dl(wav.detach().unsqueeze(1).float(), y_rec.detach()).mean()
                 accelerator.backward(d_loss)
                 optimizer.step("msd")
                 optimizer.step("mpd")
@@ -634,27 +637,29 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
                 optimizer.zero_grad("text_aligner")
                 optimizer.zero_grad("pitch_extractor")
 
-            loss_mel = stft_loss(y_rec.squeeze(), wav.detach())
+            with accelerator.autocast():
+                loss_mel = stft_loss(y_rec.squeeze(), wav.detach())
 
-            if epoch >= TMA_epoch:
-                loss_s2s = sum(
-                    F.cross_entropy(pred[:tl], txt[:tl])
-                    for pred, txt, tl in zip(s2s_pred, texts, input_lengths)
-                ) / texts.size(0)
+                if epoch >= TMA_epoch:
+                    loss_s2s = sum(
+                        F.cross_entropy(pred[:tl], txt[:tl])
+                        for pred, txt, tl in zip(s2s_pred, texts, input_lengths)
+                    ) / texts.size(0)
 
-                loss_mono    = F.l1_loss(s2s_attn, s2s_attn_mono) * 10
-                loss_gen_all = gl(wav.detach().unsqueeze(1).float(), y_rec).mean()
-                loss_slm     = wl(wav.detach(), y_rec).mean()
-                g_loss = (
-                    loss_params.lambda_mel  * loss_mel
-                    + loss_params.lambda_mono * loss_mono
-                    + loss_params.lambda_s2s  * loss_s2s
-                    + loss_params.lambda_gen  * loss_gen_all
-                    + loss_params.lambda_slm  * loss_slm
-                )
-            else:
-                loss_s2s = loss_mono = loss_gen_all = loss_slm = 0
-                g_loss = loss_mel
+                    loss_mono    = F.l1_loss(s2s_attn, s2s_attn_mono) * 10
+                    loss_gen_all = gl(wav.detach().unsqueeze(1).float(), y_rec).mean()
+                    # Pass .float() explicitly: autocast is scoped here, WavLM needs fp32 input
+                    loss_slm     = wl(wav.detach().float(), y_rec.float()).mean()
+                    g_loss = (
+                        loss_params.lambda_mel  * loss_mel
+                        + loss_params.lambda_mono * loss_mono
+                        + loss_params.lambda_s2s  * loss_s2s
+                        + loss_params.lambda_gen  * loss_gen_all
+                        + loss_params.lambda_slm  * loss_slm
+                    )
+                else:
+                    loss_s2s = loss_mono = loss_gen_all = loss_slm = 0
+                    g_loss = loss_mel
 
             running_loss += accelerator.gather(loss_mel).mean().item()
             accelerator.backward(g_loss)
@@ -701,7 +706,7 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
         loss_test = 0.0
         iters_test = 0
 
-        with torch.no_grad():
+        with torch.no_grad(), accelerator.autocast():
             for batch in val_dataloader:
                 waves = batch[0]
                 batch = [b.to(device, non_blocking=True) for b in batch[1:]]
