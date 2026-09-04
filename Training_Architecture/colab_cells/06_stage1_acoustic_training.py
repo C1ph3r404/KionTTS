@@ -641,17 +641,12 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
                     d_loss   = 0
                     g_loss   = loss_mel
 
-            # ── Discriminator backward ─────────────────────────────────────
-            # d_loss used y_rec.detach() → backward only touches msd/mpd/wd
-            if epoch >= TMA_epoch:
-                optimizer.zero_grad("msd")
-                optimizer.zero_grad("mpd")
-                optimizer.zero_grad("wd")
-                accelerator.backward(d_loss)
-                optimizer.step("msd")
-                optimizer.step("mpd")
-
-            # ── Generator backward ─────────────────────────────────────────
+            # ── Generator backward FIRST ────────────────────────────────────
+            # g_loss includes gl(wav, y_rec) which ran disc forward → disc params
+            # are part of g_loss's computation graph. We MUST do gen backward before
+            # any disc optimizer.step() to avoid "tensor modified by in-place op" error.
+            # Backward does NOT modify param data (only .grad), so disc param versions
+            # are unchanged after gen backward — safe for disc backward below.
             optimizer.zero_grad("text_encoder")
             optimizer.zero_grad("style_encoder")
             optimizer.zero_grad("decoder")
@@ -668,6 +663,18 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
             if epoch >= TMA_epoch:
                 optimizer.step("text_aligner")
                 optimizer.step("pitch_extractor")
+
+            # ── Discriminator backward SECOND ───────────────────────────────
+            # d_loss used y_rec.detach() → backward only touches msd/mpd/wd params.
+            # zero_grad here also clears disc-param .grads that gen backward accumulated
+            # (via gl()), ensuring a clean disc update.
+            if epoch >= TMA_epoch:
+                optimizer.zero_grad("msd")
+                optimizer.zero_grad("mpd")
+                optimizer.zero_grad("wd")
+                accelerator.backward(d_loss)
+                optimizer.step("msd")
+                optimizer.step("mpd")
 
             iters += 1
             _to_num = lambda v: float(v.item()) if hasattr(v, "item") else float(v)
