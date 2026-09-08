@@ -574,20 +574,41 @@ def run_stage2_training(config_path: str = CONFIG_PATH):
                     aln   = s2s_attn_mono if random.getrandbits(1) else s2s_attn
                     asr   = t_en @ aln
 
+                    d_gt = s2s_attn_mono.sum(axis=-1).detach()
+
+                    # ── Utterance-level styles for prosody & diffusion ────
+                    ss, gs = [], []
+                    for bib in range(len(mel_input_length)):
+                        mel_cur = mels[bib, :, :int(mel_input_length[bib].item())]
+                        ss.append(model["predictor_encoder"](mel_cur.unsqueeze(0).unsqueeze(1)))
+                        gs.append(model["style_encoder"](mel_cur.unsqueeze(0).unsqueeze(1)))
+
+                    s_dur   = torch.cat(ss, dim=0)   # [B, style_dim]
+                    s_audio = torch.cat(gs, dim=0)   # [B, style_dim]
+                    s_trg   = torch.cat([s_audio, s_dur], dim=-1).detach()
+
+                    # ── Prosody predictor (full sequence) ─────────────────
+                    bert_dur = model["bert"](texts, attention_mask=(~text_mask).int())
+                    d_en = model["bert_encoder"](bert_dur).transpose(-1, -2)
+                    d, p = model["predictor"](d_en, s_dur, input_lengths, s2s_attn_mono, text_mask)
+
+                    # ── Build random clips for decoder & F0 ───────────────
                     mel_len = min(int(mel_input_length.min().item() / 2 - 1), max_len // 2)
-                    en, gt, wav, style_w = [], [], [], []
+                    en, p_en, gt, wav = [], [], [], []
 
                     for bib in range(len(mel_input_length)):
                         ml = int(mel_input_length[bib].item() / 2)
                         rs = np.random.randint(0, ml - mel_len)
                         en.append(asr[bib, :, rs:rs + mel_len])
+                        p_en.append(p[bib, :, rs:rs + mel_len])
                         gt.append(mels[bib, :, rs * 2:(rs + mel_len) * 2])
                         y = waves[bib][rs * 2 * 300:(rs + mel_len) * 2 * 300]
                         wav.append(torch.from_numpy(y).to(device))
 
-                    en  = torch.stack(en)
-                    gt  = torch.stack(gt).detach()
-                    wav = torch.stack(wav).float().detach()
+                    en   = torch.stack(en)
+                    p_en = torch.stack(p_en)
+                    gt   = torch.stack(gt).detach()
+                    wav  = torch.stack(wav).float().detach()
 
                     if gt.shape[-1] < 80:
                         continue
@@ -596,39 +617,38 @@ def run_stage2_training(config_path: str = CONFIG_PATH):
                         real_norm     = log_norm(gt.unsqueeze(1)).squeeze(1).detach()
                         F0_real, _, _ = model["pitch_extractor"](gt.unsqueeze(1))
 
-                    # ── Acoustic style (from audio) & Prosodic style ──────
-                    s_audio = model["style_encoder"](gt.unsqueeze(1))
-                    s_dur   = model["predictor_encoder"](gt.unsqueeze(1))
-                    s_trg   = torch.cat([s_audio, s_dur], dim=-1).detach()
-
-                    # ── Prosody predictor ─────────────────────────────────
-                    # BERT-conditioned text representation
-                    bert_dur = model["bert"](texts, attention_mask=(~text_mask).int())
-                    d_en = model["bert_encoder"](bert_dur).transpose(-1, -2)
-                    d, p = model["predictor"](d_en, s_dur, input_lengths, s2s_attn_mono, text_mask)
-
-                    # Duration CE loss (compare predictor output to monotonic alignment)
+                    # ── Duration & CE loss ────────────────────────────────
                     loss_ce, loss_dur = 0.0, 0.0
-                    for _d, _p, _len in zip(d, p, input_lengths):
-                        _aln = s2s_attn_mono[0][:_len, :mel_len]
-                        dur_tgt = _aln.sum(dim=-1)
-                        loss_dur += F.l1_loss(_p[:_len], dur_tgt)
-                        loss_ce  += F.cross_entropy(
-                            _d[:_len, :mel_len + 1],
-                            torch.round(dur_tgt).long().clamp(0, mel_len),
-                        )
+                    for _s2s_pred, _text_input, _text_length in zip(d, d_gt, input_lengths):
+                        _tl = int(_text_length.item()) if hasattr(_text_length, "item") else int(_text_length)
+                        _s2s_pred_clip = _s2s_pred[:_tl, :]
+                        _text_input_clip = _text_input[:_tl].long()
+                        _s2s_trg = torch.zeros_like(_s2s_pred_clip)
+                        for p_idx in range(_s2s_trg.shape[0]):
+                            dur_val = min(int(_text_input_clip[p_idx].item()), _s2s_trg.shape[1])
+                            _s2s_trg[p_idx, :dur_val] = 1.0
+                        _dur_pred = torch.sigmoid(_s2s_pred_clip).sum(axis=1)
+
+                        if _tl > 2:
+                            loss_dur += F.l1_loss(
+                                _dur_pred[1:_tl - 1],
+                                _text_input_clip[1:_tl - 1].float(),
+                            )
+                        else:
+                            loss_dur += F.l1_loss(_dur_pred, _text_input_clip.float())
+                        loss_ce += F.binary_cross_entropy_with_logits(_s2s_pred_clip.flatten(), _s2s_trg.flatten())
 
                     loss_dur /= texts.size(0)
                     loss_ce  /= texts.size(0)
 
                     # ── F0 / Energy predictor ─────────────────────────────
-                    F0_pred, N_pred = model["predictor"].F0Ntrain(en, s_audio)
-                    loss_F0   = F.smooth_l1_loss(F0_pred, F0_real.unsqueeze(0))
+                    F0_pred, N_pred = model["predictor"].F0Ntrain(p_en, s_dur)
+                    loss_F0   = (F.smooth_l1_loss(F0_pred, F0_real)) / 10.0
                     loss_norm = F.smooth_l1_loss(N_pred, real_norm)
 
                     # ── Decoder ───────────────────────────────────────────
                     y_rec = model["decoder"](en, F0_real, real_norm, s_audio)
-                    loss_mel = stft_loss(y_rec.squeeze(), wav.detach())
+                    loss_mel = stft_loss(y_rec.squeeze(1), wav.detach())
 
                     # ── GAN ───────────────────────────────────────────────
                     loss_gen_all = gl(wav.detach().unsqueeze(1).float(), y_rec).mean()
