@@ -686,8 +686,9 @@ def run_stage2_training(config_path: str = CONFIG_PATH):
                     loss_norm = F.smooth_l1_loss(N_pred, real_norm)
 
                     # ── Decoder ───────────────────────────────────────────
-                    # Uses predicted prosody so predictor receives synthesis feedback
-                    y_rec = model["decoder"](en, F0_pred, N_pred, s_audio)
+                    # Uses stable ground-truth acoustic prosody (F0_real, real_norm) to prevent
+                    # untrained early predictor outputs from causing NaN/inf in istftnet harmonic generator.
+                    y_rec = model["decoder"](en, F0_real, real_norm, s_audio)
                     loss_mel = stft_loss(y_rec.squeeze(1), wav.detach())
 
                     # ── GAN & SLM ─────────────────────────────────────────
@@ -696,7 +697,12 @@ def run_stage2_training(config_path: str = CONFIG_PATH):
                     else:
                         loss_gen_all = torch.tensor(0.0, device=device)
 
-                    loss_slm = wl(wav.detach(), y_rec).mean()
+                    # WavLM speech representation loss activates in Phase 3 (joint_epoch)
+                    # Skipping WavLM in Phases 1 & 2 eliminates ~3.5s of 13-layer transformer backprop per step.
+                    if epoch >= joint_epoch:
+                        loss_slm = wl(wav.detach(), y_rec).mean()
+                    else:
+                        loss_slm = torch.tensor(0.0, device=device)
 
                     # ── Style diffusion (after diff_epoch) ────────────────
                     loss_diff = torch.tensor(0.0, device=device)
@@ -705,10 +711,6 @@ def run_stage2_training(config_path: str = CONFIG_PATH):
                         loss_diff = model["diffusion"](s_trg.unsqueeze(1), embedding=bert_dur).mean()
 
                     # ── KionStyleAdapter consistency ───────────────────────
-                    # We don't have explicit style_weights in the StyleTTS2
-                    # dataloader, so we use cosine alignment between
-                    # s_audio samples in the batch as a self-supervised signal
-                    # (full tag-supervised loss is applied in the Kion dataset loader)
                     if len(s_audio) > 1:
                         loss_kion_sty = kion_style_consistency(
                             s_audio[:-1], s_audio[1:]
@@ -728,6 +730,14 @@ def run_stage2_training(config_path: str = CONFIG_PATH):
                         + loss_params.lambda_diff * loss_diff
                         + loss_params.get("lambda_kion_style", 0.5) * loss_kion_sty
                     )
+
+                # ── Safety Check: skip NaN/Inf before updating weights ────
+                if torch.isnan(g_loss) or torch.isinf(g_loss):
+                    print(f"\n  [!] Warning: Step {iters} produced NaN/Inf loss (mel={loss_mel.item():.4f}, F0={loss_F0.item():.4f}). Skipping.")
+                    optimizer_g.zero_grad()
+                    if start_ds:
+                        optimizer_d.zero_grad()
+                    continue
 
                 # ── Generator step ─────────────────────────────────────────
                 optimizer_g.zero_grad()
