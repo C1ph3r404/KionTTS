@@ -27,6 +27,7 @@ import sys
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
 import time
+import copy
 import random
 import shutil
 import logging
@@ -449,7 +450,7 @@ def run_stage2_training(config_path: str = CONFIG_PATH):
 
     # ── Diffusion Sampler ─────────────────────────────────────────────────────
     sampler = DiffusionSampler(
-        model["diffusion"],
+        model["diffusion"].diffusion,
         sampler=ADPM2Sampler(),
         sigma_schedule=KarrasSchedule(sigma_min=0.0001, sigma_max=3.0, rho=9.0),
         clamp=False,
@@ -458,7 +459,12 @@ def run_stage2_training(config_path: str = CONFIG_PATH):
     # ── Load Stage 1 checkpoint ───────────────────────────────────────────────
     stage1_ckpt = _load_stage1_checkpoint()
     print(f"  Loading Stage 1 checkpoint: {stage1_ckpt}")
-    model, _, _, _ = load_checkpoint(model, None, stage1_ckpt, load_only_params=True)
+    model, _, _, _ = load_checkpoint(
+        model, None, stage1_ckpt, load_only_params=True,
+        ignore_modules=['bert', 'bert_encoder', 'predictor', 'predictor_encoder', 'msd', 'mpd', 'wd', 'diffusion']
+    )
+    # Stage 2 predictor_encoder is initialised from Stage 1 style_encoder weights
+    model["predictor_encoder"] = copy.deepcopy(model["style_encoder"])
 
     # ── Optimiser — separate LR groups ───────────────────────────────────────
     opt_params  = config["optimizer_params"]
@@ -474,6 +480,7 @@ def run_stage2_training(config_path: str = CONFIG_PATH):
         {"params": model["predictor_encoder"].parameters(),  "lr": lr},
         {"params": model["diffusion"].parameters(),          "lr": lr},
         {"params": model["kion_style_adapter"].parameters(), "lr": lr},
+        {"params": model["bert"].parameters(),                "lr": bert_lr},
         {"params": model["bert_encoder"].parameters(),       "lr": bert_lr},
         {"params": model["mpd"].parameters(),                "lr": ft_lr},
         {"params": model["msd"].parameters(),                "lr": ft_lr},
@@ -484,18 +491,8 @@ def run_stage2_training(config_path: str = CONFIG_PATH):
     )
     scaler = torch.amp.GradScaler("cuda", enabled=use_fp16)
 
-    # ── SLM Adversarial ───────────────────────────────────────────────────────
-    slmadv = SLMAdversarialLoss(
-        model["wd"],
-        model["diffusion"],
-        sampler,
-        log_norm,
-        model["pitch_extractor"],
-        model["mpd"],
-        model["msd"],
-        model["style_encoder"],
-        slmadv_cfg,
-    )
+    # Note: Full adversarial SLM rollouts are replaced by direct WavLMLoss (wl)
+    # in the training loop below to preserve VRAM on 16GB GPUs like Colab T4.
 
     # ── Resume Stage 2 if available ───────────────────────────────────────────
     start_epoch = 0
@@ -599,13 +596,16 @@ def run_stage2_training(config_path: str = CONFIG_PATH):
                         real_norm     = log_norm(gt.unsqueeze(1)).squeeze(1).detach()
                         F0_real, _, _ = model["pitch_extractor"](gt.unsqueeze(1))
 
-                    # ── Acoustic style (from audio) ───────────────────────
+                    # ── Acoustic style (from audio) & Prosodic style ──────
                     s_audio = model["style_encoder"](gt.unsqueeze(1))
+                    s_dur   = model["predictor_encoder"](gt.unsqueeze(1))
+                    s_trg   = torch.cat([s_audio, s_dur], dim=-1).detach()
 
                     # ── Prosody predictor ─────────────────────────────────
-                    # We also get BERT-conditioned text representation
-                    bert_dur = model["bert_encoder"](texts, attention_mask=~text_mask)
-                    d, p = model["predictor_encoder"](bert_dur, s_audio, input_lengths, s2s_attn_mono, text_mask)
+                    # BERT-conditioned text representation
+                    bert_dur = model["bert"](texts, attention_mask=(~text_mask).int())
+                    d_en = model["bert_encoder"](bert_dur).transpose(-1, -2)
+                    d, p = model["predictor"](d_en, s_dur, input_lengths, s2s_attn_mono, text_mask)
 
                     # Duration CE loss (compare predictor output to monotonic alignment)
                     loss_ce, loss_dur = 0.0, 0.0
@@ -637,8 +637,8 @@ def run_stage2_training(config_path: str = CONFIG_PATH):
                     # ── Style diffusion (after diff_epoch) ────────────────
                     loss_diff = torch.tensor(0.0, device=device)
                     if epoch >= diff_epoch:
-                        # Diffusion score matching on style latent
-                        loss_diff = model["diffusion"](s_audio.unsqueeze(1), embedding=bert_dur).mean()
+                        # Diffusion score matching on style latent (acoustic + prosodic style)
+                        loss_diff = model["diffusion"](s_trg.unsqueeze(1), embedding=bert_dur).mean()
 
                     # ── KionStyleAdapter consistency ───────────────────────
                     # We don't have explicit style_weights in the StyleTTS2
