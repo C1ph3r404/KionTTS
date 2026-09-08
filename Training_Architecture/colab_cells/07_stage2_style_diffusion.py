@@ -148,14 +148,16 @@ kion_style_consistency = KionStyleConsistencyLoss()
 
 # ─── Checkpoint Helpers ───────────────────────────────────────────────────────
 def _is_valid_checkpoint(path: str) -> bool:
-    """Verifies that a checkpoint exists, is non-empty, and can be unpickled cleanly."""
+    """Verifies that a checkpoint exists, is non-empty, and is a valid zip archive with 0MB RAM footprint."""
     if not path or not os.path.exists(path):
         return False
     try:
         if os.path.getsize(path) < 1024 * 1024:  # Must be at least 1MB
             return False
-        state = torch.load(path, map_location="cpu")
-        return isinstance(state, dict) and "net" in state
+        import zipfile
+        with zipfile.ZipFile(path, "r") as zf:
+            # testzip() checks CRC integrity of all archived objects with 0MB tensor allocations
+            return zf.testzip() is None
     except Exception as e:
         print(f"  [!] Integrity check failed for '{os.path.basename(path)}': {e}")
         return False
@@ -172,8 +174,9 @@ def _save_to_drive(state: dict, epoch: int, step: int = None, is_best: bool = Fa
         slot = "A" if epoch % 2 == 0 else "B"
         ckpt_path = os.path.join(DRIVE_CKPT_DIR, f"kion_{stage}_epoch_slot_{slot}.pth")
 
-    # Safe write: save to local /tmp first, verify integrity, then copy to Drive
-    tmp_path = f"/tmp/kion_{stage}_tmp_{int(time.time())}.pth"
+    # Safe write: save to persistent local disk (/content or ckpt dir) first, never /tmp (tmpfs in System RAM)
+    local_dir = "/content" if os.path.exists("/content") else os.path.dirname(ckpt_path)
+    tmp_path = os.path.join(local_dir, f"kion_{stage}_tmp_{int(time.time())}.pth")
     try:
         torch.save(state, tmp_path)
         if _is_valid_checkpoint(tmp_path):
@@ -367,6 +370,11 @@ def run_stage2_training(config_path: str = CONFIG_PATH):
     print("KionTTS — Stage 2: Style Diffusion + Adapter Training")
     print("=" * 65)
 
+    import gc
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
     config      = yaml.safe_load(open(config_path))
     config      = _resolve_config_paths(config)
     _ensure_pretrained_assets(config)
@@ -417,19 +425,23 @@ def run_stage2_training(config_path: str = CONFIG_PATH):
     train_list, val_list = get_data_path_list(
         data_params["train_data"], data_params["val_data"]
     )
+    # num_workers=0 and load_ref=False:
+    # 1. Eliminates multiprocessing worker duplication and glibc heap fragmentation
+    # 2. Eliminates /dev/shm shared memory queue IPC buffering (saving gigabytes of System RAM)
+    # 3. load_ref=False skips reading redundant 2nd audio file and running torchaudio STFT per item
     train_dataloader = build_dataloader(
         train_list, data_params["root_path"],
         OOD_data=data_params["OOD_data"],
         min_length=data_params["min_length"],
-        batch_size=batch_size, num_workers=2,
-        dataset_config={}, device=device,
+        batch_size=batch_size, num_workers=0,
+        dataset_config={"load_ref": False}, device=device,
     )
     val_dataloader = build_dataloader(
         val_list, data_params["root_path"],
         OOD_data=data_params["OOD_data"],
         min_length=data_params["min_length"],
         batch_size=batch_size, validation=True,
-        num_workers=0, dataset_config={}, device=device,
+        num_workers=0, dataset_config={"load_ref": False}, device=device,
     )
     print(f"  Train: {len(train_list)} | Val: {len(val_list)}")
 
@@ -803,7 +815,7 @@ def run_stage2_training(config_path: str = CONFIG_PATH):
                     diff=f"{loss_diff.item():.4f}" if epoch >= diff_epoch else "—",
                 )
 
-                # ── Checkpoint every save_step_interval (1000) steps ──
+                # ── Checkpoint every save_step_interval (200) steps ──
                 if iters % save_step_interval == 0:
                     state = {
                         "net":         {k: model[k].state_dict() for k in model},
@@ -814,6 +826,9 @@ def run_stage2_training(config_path: str = CONFIG_PATH):
                         "epoch":       epoch,
                     }
                     _save_to_drive(state, epoch=epoch + 1, step=iters, stage="stage2")
+                    del state
+                    import gc
+                    gc.collect()
 
                 # TensorBoard
                 if (i + 1) % 20 == 0:
@@ -824,18 +839,26 @@ def run_stage2_training(config_path: str = CONFIG_PATH):
                     writer.add_scalar("s2/gen_loss",  loss_gen_all.item(),  iters)
                     writer.add_scalar("s2/disc_loss", d_loss.item(),        iters)
 
-                # Explicit cleanup to prevent System RAM accumulation
-                del waves, batch, en, p_en, gt, wav
-                if (i + 1) % 50 == 0:
-                    import gc
-                    gc.collect()
-
             except RuntimeError as e:
                 if "out of memory" in str(e).lower():
                     torch.cuda.empty_cache()
                     print(f"  [OOM] Step {i} skipped — clearing CUDA cache.")
                     continue
                 raise
+            finally:
+                # Guaranteed cleanup on every single step to eliminate System RAM accumulation
+                del waves, batch
+                if "en" in locals():
+                    del en
+                if "p_en" in locals():
+                    del p_en
+                if "gt" in locals():
+                    del gt
+                if "wav" in locals():
+                    del wav
+                if (i + 1) % 50 == 0:
+                    import gc
+                    gc.collect()
 
         # ── Validation ────────────────────────────────────────────────────
         _ = [model[k].eval() for k in model]
@@ -877,6 +900,7 @@ def run_stage2_training(config_path: str = CONFIG_PATH):
                 loss_mel      = stft_loss(y_rec.squeeze(), wav_v.detach())
                 val_loss     += loss_mel.item()
                 n_val        += 1
+                del waves, batch, en, gt, wav_v
 
         val_loss /= max(n_val, 1)
         is_best   = val_loss < best_loss

@@ -79,6 +79,7 @@ class FilePathDataset(torch.utils.data.Dataset):
                  validation=False,
                  OOD_data="Data/OOD_texts.txt",
                  min_length=50,
+                 load_ref=True,
                  ):
 
         spect_params = SPECT_PARAMS
@@ -88,6 +89,7 @@ class FilePathDataset(torch.utils.data.Dataset):
         self.data_list = [data if len(data) == 3 else (*data, 0) for data in _data_list]
         self.text_cleaner = TextCleaner()
         self.sr = sr
+        self.load_ref = load_ref
 
         # Group by speaker using native Python dict to prevent pandas memory leaks
         # in multiprocessing DataLoader workers (copy-on-write page table bloating)
@@ -104,10 +106,13 @@ class FilePathDataset(torch.utils.data.Dataset):
         self.max_mel_length = 192
         
         self.min_length = min_length
-        with open(OOD_data, 'r', encoding='utf-8') as f:
-            tl = f.readlines()
-        idx = 1 if '.wav' in tl[0].split('|')[0] else 0
-        self.ptexts = [t.split('|')[idx] for t in tl]
+        if self.load_ref and os.path.exists(OOD_data):
+            with open(OOD_data, 'r', encoding='utf-8') as f:
+                tl = f.readlines()
+            idx = 1 if tl and '.wav' in tl[0].split('|')[0] else 0
+            self.ptexts = [t.split('|')[idx] for t in tl] if tl else [""]
+        else:
+            self.ptexts = []
         
         self.root_path = root_path
 
@@ -126,37 +131,40 @@ class FilePathDataset(torch.utils.data.Dataset):
         length_feature = acoustic_feature.size(1)
         acoustic_feature = acoustic_feature[:, :(length_feature - length_feature % 2)]
         
-        # get reference sample via O(1) random choice (zero DataFrame memory overhead)
-        spk_candidates = self.speaker_dict.get(str(speaker_id)) or self.data_list
-        ref_data = random.choice(spk_candidates)
-        ref_mel_tensor, ref_label = self._load_data(ref_data[:3])
-        
-        # get OOD text
-        
-        ps = ""
-        
-        while len(ps) < self.min_length:
-            rand_idx = np.random.randint(0, len(self.ptexts) - 1)
-            ps = self.ptexts[rand_idx]
+        if self.load_ref and self.ptexts:
+            # get reference sample via O(1) random choice (zero DataFrame memory overhead)
+            spk_candidates = self.speaker_dict.get(str(speaker_id)) or self.data_list
+            ref_data = random.choice(spk_candidates)
+            ref_mel_tensor, ref_label = self._load_data(ref_data[:3])
             
-            text = self.text_cleaner(ps)
-            text.insert(0, 0)
-            text.append(0)
+            # get OOD text
+            ps = ""
+            while len(ps) < self.min_length:
+                rand_idx = np.random.randint(0, len(self.ptexts))
+                ps = self.ptexts[rand_idx]
+                
+                text = self.text_cleaner(ps)
+                text.insert(0, 0)
+                text.append(0)
 
-            ref_text = torch.LongTensor(text)
+                ref_text = torch.LongTensor(text)
+        else:
+            ref_mel_tensor = torch.zeros(80, self.max_mel_length, dtype=torch.float32)
+            ref_label = speaker_id
+            ref_text = torch.zeros(1, dtype=torch.long)
         
         return speaker_id, acoustic_feature, text_tensor, ref_text, ref_mel_tensor, ref_label, path, wave
 
     def _load_tensor(self, data):
         wave_path, text, speaker_id = data
         speaker_id = int(speaker_id)
-        wave, sr = sf.read(osp.join(self.root_path, wave_path))
+        wave, sr = sf.read(osp.join(self.root_path, wave_path), dtype='float32')
         if wave.shape[-1] == 2:
             wave = wave[:, 0].squeeze()
         if sr != 24000:
             wave = librosa.resample(wave, orig_sr=sr, target_sr=24000)
             
-        wave = np.concatenate([np.zeros([5000]), wave, np.zeros([5000])], axis=0)
+        wave = np.concatenate([np.zeros([5000], dtype=np.float32), wave, np.zeros([5000], dtype=np.float32)], axis=0)
         
         text = self.text_cleaner(text)
         
@@ -247,7 +255,7 @@ def build_dataloader(path_list,
                      OOD_data="Data/OOD_texts.txt",
                      min_length=50,
                      batch_size=4,
-                     num_workers=1,
+                     num_workers=0,
                      device='cpu',
                      collate_config={},
                      dataset_config={}):
@@ -260,7 +268,7 @@ def build_dataloader(path_list,
                              num_workers=num_workers,
                              drop_last=(not validation),
                              collate_fn=collate_fn,
-                             pin_memory=(device != 'cpu'),
+                             pin_memory=(device != 'cpu' and num_workers > 0),
                              persistent_workers=(num_workers > 0))
 
     return data_loader
