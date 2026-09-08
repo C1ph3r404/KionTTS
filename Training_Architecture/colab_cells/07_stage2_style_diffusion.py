@@ -396,7 +396,11 @@ def run_stage2_training(config_path: str = CONFIG_PATH):
             max_len = 200
 
     if torch.cuda.is_available():
-        torch.backends.cudnn.benchmark = True
+        # benchmark=False prevents algorithm re-searching on variable audio shapes.
+        # allow_tf32=True gives free Tensor Core speedup on Ampere+ GPUs.
+        torch.backends.cudnn.benchmark        = False
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32       = True
 
     writer = SummaryWriter(os.path.join(log_dir, "tensorboard_stage2"))
 
@@ -436,6 +440,15 @@ def run_stage2_training(config_path: str = CONFIG_PATH):
     model_params = recursive_munch(config["model_params"])
     model        = build_model(model_params, text_aligner, pitch_extractor, plbert)
     _ = [model[k].to(device) for k in model]
+
+    # Freeze utility models (text_aligner and pitch_extractor are frozen in Stage 2)
+    for p in model["text_aligner"].parameters():
+        p.requires_grad = False
+    model["text_aligner"].eval()
+
+    for p in model["pitch_extractor"].parameters():
+        p.requires_grad = False
+    model["pitch_extractor"].eval()
 
     # KionStyleAdapter
     ksa_cfg = config["model_params"]["kion_style_adapter"]
@@ -537,6 +550,12 @@ def run_stage2_training(config_path: str = CONFIG_PATH):
     wl          = WavLMLoss(
         model_params.slm.model, model["wd"], sr, model_params.slm.sr
     ).to(device)
+    # Freeze WavLM backbone: inputs (y_rec) receive gradients to train prosody/decoder,
+    # but 95M WavLM weights skip gradient computation, cutting SLM backward latency ~50%
+    # and preventing massive VRAM consumption.
+    for param in wl.parameters():
+        param.requires_grad = False
+    wl.eval()
 
     print(f"\n  Training from epoch {start_epoch + 1}...\n")
     torch.cuda.empty_cache()
@@ -547,6 +566,13 @@ def run_stage2_training(config_path: str = CONFIG_PATH):
     for epoch in range(start_epoch, epochs):
         epoch_start = time.time()
         _ = [model[k].train() for k in model]
+        # Keep frozen utility modules in eval mode
+        model["text_aligner"].eval()
+        model["pitch_extractor"].eval()
+        wl.eval()
+
+        # Discriminator starts when style diffusion activates (diff_epoch)
+        start_ds = (epoch >= diff_epoch)
 
         total_steps_in_loader = len(train_dataloader)
         if epoch == start_epoch and (iters % total_steps_in_loader) != 0:
@@ -570,30 +596,30 @@ def run_stage2_training(config_path: str = CONFIG_PATH):
             texts, input_lengths, ref_texts, ref_lengths, mels, mel_input_length, _ = batch
 
             try:
+                # ── ASR alignment (under no_grad to eliminate 90M aligner graph tracking) ──
                 with torch.no_grad():
                     mask      = length_to_mask(mel_input_length // (2 ** n_down)).to(device)
                     text_mask = length_to_mask(input_lengths).to(device)
-
-                # ── ASR alignment ──────────────────────────────────────────
-                ppgs, s2s_pred, s2s_attn = model["text_aligner"](mels, mask, texts)
-                s2s_attn = s2s_attn.transpose(-1, -2)[..., 1:].transpose(-1, -2)
-
-                with torch.no_grad():
+                    ppgs, s2s_pred, s2s_attn = model["text_aligner"](mels, mask, texts)
+                    s2s_attn = s2s_attn.transpose(-1, -2)[..., 1:].transpose(-1, -2)
+                    attn_mask = text_mask.unsqueeze(2) | mask.unsqueeze(1)
+                    s2s_attn.masked_fill_(attn_mask, 0.0)
                     mask_ST       = mask_from_lens(s2s_attn, input_lengths, mel_input_length // (2 ** n_down))
                     s2s_attn_mono = maximum_path(s2s_attn, mask_ST)
 
                 # ── Text + Prosody encode ─────────────────────────────────
                 with torch.amp.autocast("cuda", enabled=use_fp16):
                     t_en  = model["text_encoder"](texts, input_lengths, text_mask)
-                    aln   = s2s_attn_mono if random.getrandbits(1) else s2s_attn
+                    aln   = s2s_attn_mono if random.getrandbits(1) else s2s_attn.detach()
                     asr   = t_en @ aln
 
                     d_gt = s2s_attn_mono.sum(axis=-1).detach()
 
                     # ── Utterance-level styles for prosody & diffusion ────
+                    mel_lens = mel_input_length.tolist()
                     ss, gs = [], []
-                    for bib in range(len(mel_input_length)):
-                        mel_cur = mels[bib, :, :int(mel_input_length[bib].item())]
+                    for bib, ml_raw in enumerate(mel_lens):
+                        mel_cur = mels[bib, :, :ml_raw]
                         ss.append(model["predictor_encoder"](mel_cur.unsqueeze(0).unsqueeze(1)))
                         gs.append(model["style_encoder"](mel_cur.unsqueeze(0).unsqueeze(1)))
 
@@ -607,11 +633,12 @@ def run_stage2_training(config_path: str = CONFIG_PATH):
                     d, p = model["predictor"](d_en, s_dur, input_lengths, s2s_attn_mono, text_mask)
 
                     # ── Build random clips for decoder & F0 ───────────────
-                    mel_len = min(int(mel_input_length.min().item() / 2 - 1), max_len // 2)
+                    min_mel_len = min(mel_lens)
+                    mel_len = min(min_mel_len // 2 - 1, max_len // 2)
                     en, p_en, gt, wav = [], [], [], []
 
-                    for bib in range(len(mel_input_length)):
-                        ml = int(mel_input_length[bib].item() / 2)
+                    for bib, ml_raw in enumerate(mel_lens):
+                        ml = ml_raw // 2
                         rs = np.random.randint(0, ml - mel_len)
                         en.append(asr[bib, :, rs:rs + mel_len])
                         p_en.append(p[bib, :, rs:rs + mel_len])
@@ -631,17 +658,15 @@ def run_stage2_training(config_path: str = CONFIG_PATH):
                         real_norm     = log_norm(gt.unsqueeze(1)).squeeze(1).detach()
                         F0_real, _, _ = model["pitch_extractor"](gt.unsqueeze(1))
 
-                    # ── Duration & CE loss ────────────────────────────────
+                    # ── Duration & CE loss (vectorized on GPU, zero CPU-GPU sync stalls) ──
                     loss_ce, loss_dur = 0.0, 0.0
-                    for _s2s_pred, _text_input, _text_length in zip(d, d_gt, input_lengths):
-                        _tl = int(_text_length.item()) if hasattr(_text_length, "item") else int(_text_length)
+                    text_lens = input_lengths.tolist()
+                    for _s2s_pred, _text_input, _tl in zip(d, d_gt, text_lens):
                         _s2s_pred_clip = _s2s_pred[:_tl, :]
                         _text_input_clip = _text_input[:_tl].long()
-                        _s2s_trg = torch.zeros_like(_s2s_pred_clip)
-                        for p_idx in range(_s2s_trg.shape[0]):
-                            dur_val = min(int(_text_input_clip[p_idx].item()), _s2s_trg.shape[1])
-                            _s2s_trg[p_idx, :dur_val] = 1.0
-                        _dur_pred = torch.sigmoid(_s2s_pred_clip).sum(axis=1)
+                        max_dur = _s2s_pred_clip.shape[1]
+                        _s2s_trg = (torch.arange(max_dur, device=device).unsqueeze(0) < _text_input_clip.unsqueeze(1)).float()
+                        _dur_pred = torch.sigmoid(_s2s_pred_clip).sum(dim=1)
 
                         if _tl > 2:
                             loss_dur += F.l1_loss(
@@ -661,12 +686,17 @@ def run_stage2_training(config_path: str = CONFIG_PATH):
                     loss_norm = F.smooth_l1_loss(N_pred, real_norm)
 
                     # ── Decoder ───────────────────────────────────────────
-                    y_rec = model["decoder"](en, F0_real, real_norm, s_audio)
+                    # Uses predicted prosody so predictor receives synthesis feedback
+                    y_rec = model["decoder"](en, F0_pred, N_pred, s_audio)
                     loss_mel = stft_loss(y_rec.squeeze(1), wav.detach())
 
-                    # ── GAN ───────────────────────────────────────────────
-                    loss_gen_all = gl(wav.detach().unsqueeze(1).float(), y_rec).mean()
-                    loss_slm     = wl(wav.detach(), y_rec).mean()
+                    # ── GAN & SLM ─────────────────────────────────────────
+                    if start_ds:
+                        loss_gen_all = gl(wav.detach().unsqueeze(1).float(), y_rec).mean()
+                    else:
+                        loss_gen_all = torch.tensor(0.0, device=device)
+
+                    loss_slm = wl(wav.detach(), y_rec).mean()
 
                     # ── Style diffusion (after diff_epoch) ────────────────
                     loss_diff = torch.tensor(0.0, device=device)
@@ -708,15 +738,19 @@ def run_stage2_training(config_path: str = CONFIG_PATH):
                 )
                 scaler.step(optimizer_g)
 
-                # ── Discriminator step ─────────────────────────────────────
-                optimizer_d.zero_grad()
-                d_loss = dl(wav.detach().unsqueeze(1).float(), y_rec.detach()).mean()
-                scaler.scale(d_loss).backward()
-                scaler.unscale_(optimizer_d)
-                torch.nn.utils.clip_grad_norm_(
-                    [p for g in optimizer_d.param_groups for p in g["params"]], 5.0
-                )
-                scaler.step(optimizer_d)
+                # ── Discriminator step (only activated from diff_epoch onward) ──
+                if start_ds:
+                    optimizer_d.zero_grad()
+                    d_loss = dl(wav.detach().unsqueeze(1).float(), y_rec.detach()).mean()
+                    scaler.scale(d_loss).backward()
+                    scaler.unscale_(optimizer_d)
+                    torch.nn.utils.clip_grad_norm_(
+                        [p for g in optimizer_d.param_groups for p in g["params"]], 5.0
+                    )
+                    scaler.step(optimizer_d)
+                else:
+                    d_loss = torch.tensor(0.0, device=device)
+
                 scaler.update()
 
                 iters += 1
@@ -773,10 +807,11 @@ def run_stage2_training(config_path: str = CONFIG_PATH):
                 s2s_attn  = s2s_attn.transpose(-1, -2)[..., 1:].transpose(-1, -2)
                 asr       = t_en @ s2s_attn
 
-                mel_len   = min(int(mel_input_length.min().item() / 2 - 1), max_len // 2)
+                val_mel_lens = mel_input_length.tolist()
+                mel_len      = min(min(val_mel_lens) // 2 - 1, max_len // 2)
                 en, gt, wav_v = [], [], []
-                for bib in range(len(mel_input_length)):
-                    ml = int(mel_input_length[bib].item() / 2)
+                for bib, ml_raw in enumerate(val_mel_lens):
+                    ml = ml_raw // 2
                     rs = np.random.randint(0, ml - mel_len)
                     en.append(asr[bib, :, rs:rs + mel_len])
                     gt.append(mels[bib, :, rs * 2:(rs + mel_len) * 2])
