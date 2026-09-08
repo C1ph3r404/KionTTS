@@ -660,7 +660,7 @@ def run_stage2_training(config_path: str = CONFIG_PATH):
                         p_en.append(p[bib, :, rs:rs + mel_len])
                         gt.append(mels[bib, :, rs * 2:(rs + mel_len) * 2])
                         y = waves[bib][rs * 2 * 300:(rs + mel_len) * 2 * 300]
-                        wav.append(torch.from_numpy(y).to(device))
+                        wav.append(torch.from_numpy(np.array(y, copy=True)).to(device))
 
                     en   = torch.stack(en)
                     p_en = torch.stack(p_en)
@@ -822,6 +822,12 @@ def run_stage2_training(config_path: str = CONFIG_PATH):
                     writer.add_scalar("s2/diff_loss", loss_diff.item(),     iters)
                     writer.add_scalar("s2/gen_loss",  loss_gen_all.item(),  iters)
                     writer.add_scalar("s2/disc_loss", d_loss.item(),        iters)
+
+                # Explicit cleanup to prevent System RAM accumulation
+                del waves, batch, en, p_en, gt, wav
+                if (i + 1) % 50 == 0:
+                    import gc
+                    gc.collect()
 
             except RuntimeError as e:
                 if "out of memory" in str(e).lower():

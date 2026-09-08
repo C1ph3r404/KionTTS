@@ -89,9 +89,13 @@ class FilePathDataset(torch.utils.data.Dataset):
         self.text_cleaner = TextCleaner()
         self.sr = sr
 
-        self.df = pd.DataFrame(self.data_list)
-        if 2 in self.df.columns:
-            self.df[2] = self.df[2].astype(str)
+        # Group by speaker using native Python dict to prevent pandas memory leaks
+        # in multiprocessing DataLoader workers (copy-on-write page table bloating)
+        from collections import defaultdict
+        self.speaker_dict = defaultdict(list)
+        for d in self.data_list:
+            spk = str(d[2]) if len(d) > 2 else "0"
+            self.speaker_dict[spk].append(d)
 
         self.to_melspec = torchaudio.transforms.MelSpectrogram(**MEL_PARAMS)
 
@@ -122,11 +126,9 @@ class FilePathDataset(torch.utils.data.Dataset):
         length_feature = acoustic_feature.size(1)
         acoustic_feature = acoustic_feature[:, :(length_feature - length_feature % 2)]
         
-        # get reference sample
-        matched_df = self.df[self.df[2].astype(str) == str(speaker_id)]
-        if len(matched_df) == 0:
-            matched_df = self.df
-        ref_data = matched_df.sample(n=1).iloc[0].tolist()
+        # get reference sample via O(1) random choice (zero DataFrame memory overhead)
+        spk_candidates = self.speaker_dict.get(str(speaker_id)) or self.data_list
+        ref_data = random.choice(spk_candidates)
         ref_mel_tensor, ref_label = self._load_data(ref_data[:3])
         
         # get OOD text
