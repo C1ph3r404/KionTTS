@@ -466,13 +466,13 @@ def run_stage2_training(config_path: str = CONFIG_PATH):
     # Stage 2 predictor_encoder is initialised from Stage 1 style_encoder weights
     model["predictor_encoder"] = copy.deepcopy(model["style_encoder"])
 
-    # ── Optimiser — separate LR groups ───────────────────────────────────────
+    # ── Optimisers — separate Generator and Discriminator ─────────────────────
     opt_params  = config["optimizer_params"]
     lr          = float(opt_params.get("lr", 1e-4))
     ft_lr       = float(opt_params.get("ft_lr", 1e-5))
     bert_lr     = float(opt_params.get("bert_lr", 1e-5))
 
-    optimizer = torch.optim.AdamW([
+    optimizer_g = torch.optim.AdamW([
         {"params": model["text_encoder"].parameters(),       "lr": ft_lr},
         {"params": model["style_encoder"].parameters(),      "lr": ft_lr},
         {"params": model["decoder"].parameters(),            "lr": ft_lr},
@@ -482,12 +482,18 @@ def run_stage2_training(config_path: str = CONFIG_PATH):
         {"params": model["kion_style_adapter"].parameters(), "lr": lr},
         {"params": model["bert"].parameters(),                "lr": bert_lr},
         {"params": model["bert_encoder"].parameters(),       "lr": bert_lr},
+    ], betas=(0.9, 0.98), weight_decay=1e-2)
+
+    optimizer_d = torch.optim.AdamW([
         {"params": model["mpd"].parameters(),                "lr": ft_lr},
         {"params": model["msd"].parameters(),                "lr": ft_lr},
     ], betas=(0.9, 0.98), weight_decay=1e-2)
 
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, T_max=epochs, eta_min=ft_lr * 0.1
+    scheduler_g = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer_g, T_max=epochs, eta_min=ft_lr * 0.1
+    )
+    scheduler_d = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer_d, T_max=epochs, eta_min=ft_lr * 0.1
     )
     scaler = torch.amp.GradScaler("cuda", enabled=use_fp16)
 
@@ -503,9 +509,17 @@ def run_stage2_training(config_path: str = CONFIG_PATH):
         print(f"  Resuming Stage 2 from: {latest_s2}")
         ckpt = torch.load(latest_s2, map_location=device)
         for k in model:
-            if k in ckpt["net"]:
+            if "net" in ckpt and k in ckpt["net"]:
                 model[k].load_state_dict(ckpt["net"][k])
-        optimizer.load_state_dict(ckpt["optimizer"])
+        if "optimizer_g" in ckpt:
+            optimizer_g.load_state_dict(ckpt["optimizer_g"])
+        if "optimizer_d" in ckpt:
+            optimizer_d.load_state_dict(ckpt["optimizer_d"])
+        elif "optimizer" in ckpt:
+            try:
+                optimizer_g.load_state_dict(ckpt["optimizer"])
+            except Exception:
+                pass
         start_epoch = ckpt.get("epoch", 0) + 1
         iters       = ckpt.get("iters", 0)
         best_loss   = ckpt.get("val_loss", float("inf"))
@@ -685,25 +699,24 @@ def run_stage2_training(config_path: str = CONFIG_PATH):
                         + loss_params.get("lambda_kion_style", 0.5) * loss_kion_sty
                     )
 
+                # ── Generator step ─────────────────────────────────────────
+                optimizer_g.zero_grad()
+                scaler.scale(g_loss).backward()
+                scaler.unscale_(optimizer_g)
+                torch.nn.utils.clip_grad_norm_(
+                    [p for g in optimizer_g.param_groups for p in g["params"]], 5.0
+                )
+                scaler.step(optimizer_g)
+
                 # ── Discriminator step ─────────────────────────────────────
-                optimizer.zero_grad()
+                optimizer_d.zero_grad()
                 d_loss = dl(wav.detach().unsqueeze(1).float(), y_rec.detach()).mean()
                 scaler.scale(d_loss).backward()
-                scaler.unscale_(optimizer)
+                scaler.unscale_(optimizer_d)
                 torch.nn.utils.clip_grad_norm_(
-                    [p for g in optimizer.param_groups for p in g["params"]], 5.0
+                    [p for g in optimizer_d.param_groups for p in g["params"]], 5.0
                 )
-                scaler.step(optimizer)
-                scaler.update()
-
-                # ── Generator step ─────────────────────────────────────────
-                optimizer.zero_grad()
-                scaler.scale(g_loss).backward()
-                scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(
-                    [p for g in optimizer.param_groups for p in g["params"]], 5.0
-                )
-                scaler.step(optimizer)
+                scaler.step(optimizer_d)
                 scaler.update()
 
                 iters += 1
@@ -717,11 +730,12 @@ def run_stage2_training(config_path: str = CONFIG_PATH):
                 # ── Checkpoint every save_step_interval (1000) steps ──
                 if iters % save_step_interval == 0:
                     state = {
-                        "net":       {k: model[k].state_dict() for k in model},
-                        "optimizer": optimizer.state_dict(),
-                        "iters":     iters,
-                        "val_loss":  loss_mel.item(),
-                        "epoch":     epoch,
+                        "net":         {k: model[k].state_dict() for k in model},
+                        "optimizer_g": optimizer_g.state_dict(),
+                        "optimizer_d": optimizer_d.state_dict(),
+                        "iters":       iters,
+                        "val_loss":    loss_mel.item(),
+                        "epoch":       epoch,
                     }
                     _save_to_drive(state, epoch=epoch + 1, step=iters, stage="stage2")
 
@@ -818,15 +832,17 @@ def run_stage2_training(config_path: str = CONFIG_PATH):
                     pass
         print(f"  [♫] Saved {min(3, len(en))} audio samples → {sample_dir}")
 
-        scheduler.step()
+        scheduler_g.step()
+        scheduler_d.step()
 
         # Save checkpoint every 1 epoch
         state = {
-            "net":       {k: model[k].state_dict() for k in model},
-            "optimizer": optimizer.state_dict(),
-            "iters":     iters,
-            "val_loss":  val_loss,
-            "epoch":     epoch,
+            "net":         {k: model[k].state_dict() for k in model},
+            "optimizer_g": optimizer_g.state_dict(),
+            "optimizer_d": optimizer_d.state_dict(),
+            "iters":       iters,
+            "val_loss":    val_loss,
+            "epoch":       epoch,
         }
         _save_to_drive(state, epoch + 1, is_best=is_best, stage="stage2")
 
@@ -834,12 +850,13 @@ def run_stage2_training(config_path: str = CONFIG_PATH):
     print("\n[+] Stage 2 training complete!")
     final_path = os.path.join(DRIVE_CKPT_DIR, "kion_stage2_final.pth")
     torch.save({
-        "net":       {k: model[k].state_dict() for k in model},
-        "optimizer": optimizer.state_dict(),
-        "iters":     iters,
-        "val_loss":  best_loss,
-        "epoch":     epochs,
-        "config":    config,
+        "net":         {k: model[k].state_dict() for k in model},
+        "optimizer_g": optimizer_g.state_dict(),
+        "optimizer_d": optimizer_d.state_dict(),
+        "iters":       iters,
+        "val_loss":    best_loss,
+        "epoch":       epochs,
+        "config":      config,
     }, final_path)
     print(f"  Final checkpoint → {final_path}")
     print("  Proceed to Cell 08 for inference testing.")
