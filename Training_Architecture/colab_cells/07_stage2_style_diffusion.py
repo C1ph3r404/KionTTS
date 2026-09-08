@@ -571,6 +571,22 @@ def run_stage2_training(config_path: str = CONFIG_PATH):
         model["pitch_extractor"].eval()
         wl.eval()
 
+        # In Phases 1 & 2, keep decoder and style_encoder frozen at Stage 1 weights
+        if epoch < joint_epoch:
+            model["decoder"].eval()
+            model["style_encoder"].eval()
+            for p in model["decoder"].parameters():
+                p.requires_grad = False
+            for p in model["style_encoder"].parameters():
+                p.requires_grad = False
+        else:
+            model["decoder"].train()
+            model["style_encoder"].train()
+            for p in model["decoder"].parameters():
+                p.requires_grad = True
+            for p in model["style_encoder"].parameters():
+                p.requires_grad = True
+
         # Discriminator starts when style diffusion activates (diff_epoch)
         start_ds = (epoch >= diff_epoch)
 
@@ -685,11 +701,14 @@ def run_stage2_training(config_path: str = CONFIG_PATH):
                     loss_F0   = (F.smooth_l1_loss(F0_pred, F0_real)) / 10.0
                     loss_norm = F.smooth_l1_loss(N_pred, real_norm)
 
-                    # ── Decoder ───────────────────────────────────────────
-                    # Uses stable ground-truth acoustic prosody (F0_real, real_norm) to prevent
-                    # untrained early predictor outputs from causing NaN/inf in istftnet harmonic generator.
-                    y_rec = model["decoder"](en, F0_real, real_norm, s_audio)
-                    loss_mel = stft_loss(y_rec.squeeze(1), wav.detach())
+                    # ── Decoder (Monitored in FP32 with clamping) ──────────
+                    # In Phase 1 & 2 (before joint_epoch), decoder weights are fixed to the
+                    # pre-trained Stage 1 acoustic checkpoint. We evaluate loss_mel under no_grad
+                    # in FP32 with [-1, 1] clamping to guarantee zero NaN/inf issues and 0s backprop latency.
+                    with torch.no_grad():
+                        y_rec = model["decoder"](en, F0_real, real_norm, s_audio)
+                        y_rec_clamped = torch.clamp(y_rec.squeeze(1).float(), -1.0, 1.0)
+                        loss_mel = stft_loss(y_rec_clamped, wav.detach().float())
 
                     # ── GAN & SLM ─────────────────────────────────────────
                     if start_ds:
@@ -698,7 +717,6 @@ def run_stage2_training(config_path: str = CONFIG_PATH):
                         loss_gen_all = torch.tensor(0.0, device=device)
 
                     # WavLM speech representation loss activates in Phase 3 (joint_epoch)
-                    # Skipping WavLM in Phases 1 & 2 eliminates ~3.5s of 13-layer transformer backprop per step.
                     if epoch >= joint_epoch:
                         loss_slm = wl(wav.detach(), y_rec).mean()
                     else:
@@ -719,21 +737,34 @@ def run_stage2_training(config_path: str = CONFIG_PATH):
                         loss_kion_sty = torch.tensor(0.0, device=device)
 
                     # ── Total generator loss ──────────────────────────────
-                    g_loss = (
-                        loss_params.lambda_mel  * loss_mel
-                        + loss_params.lambda_F0   * loss_F0
-                        + loss_params.lambda_norm * loss_norm
-                        + loss_params.lambda_dur  * loss_dur
-                        + loss_params.lambda_ce   * loss_ce
-                        + loss_params.lambda_gen  * loss_gen_all
-                        + loss_params.lambda_slm  * loss_slm
-                        + loss_params.lambda_diff * loss_diff
-                        + loss_params.get("lambda_kion_style", 0.5) * loss_kion_sty
-                    )
+                    # In Phases 1 & 2, g_loss strictly trains the prosody predictor, BERT, and adapter.
+                    # In Phase 3 (joint_epoch), acoustic mel, GAN, and SLM losses are added for joint fine-tuning.
+                    if epoch >= joint_epoch:
+                        g_loss = (
+                            loss_params.lambda_mel  * loss_mel
+                            + loss_params.lambda_F0   * loss_F0
+                            + loss_params.lambda_norm * loss_norm
+                            + loss_params.lambda_dur  * loss_dur
+                            + loss_params.lambda_ce   * loss_ce
+                            + loss_params.lambda_gen  * loss_gen_all
+                            + loss_params.lambda_slm  * loss_slm
+                            + loss_params.lambda_diff * loss_diff
+                            + loss_params.get("lambda_kion_style", 0.5) * loss_kion_sty
+                        )
+                    else:
+                        g_loss = (
+                            loss_params.lambda_F0   * loss_F0
+                            + loss_params.lambda_norm * loss_norm
+                            + loss_params.lambda_dur  * loss_dur
+                            + loss_params.lambda_ce   * loss_ce
+                            + loss_params.lambda_diff * loss_diff
+                            + loss_params.get("lambda_kion_style", 0.5) * loss_kion_sty
+                        )
 
                 # ── Safety Check: skip NaN/Inf before updating weights ────
                 if torch.isnan(g_loss) or torch.isinf(g_loss):
-                    print(f"\n  [!] Warning: Step {iters} produced NaN/Inf loss (mel={loss_mel.item():.4f}, F0={loss_F0.item():.4f}). Skipping.")
+                    iters += 1
+                    print(f"\n  [!] Warning: Step {iters} produced NaN/Inf loss (F0={loss_F0.item():.4f}). Skipping.")
                     optimizer_g.zero_grad()
                     if start_ds:
                         optimizer_d.zero_grad()
