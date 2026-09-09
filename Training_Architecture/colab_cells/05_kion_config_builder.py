@@ -15,16 +15,34 @@ def _get_repo_root() -> str:
     rel_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
     if os.path.exists(os.path.join(rel_path, "model")):
         return rel_path
-    for p in ["/content/KionTTS", "/content/Kiontts", "/content/kiontts"]:
+    for p in [
+        "/kaggle/working/KionTTS",
+        "/kaggle/working/kiontts",
+        "/kaggle/working",
+        "/content/KionTTS",
+        "/content/Kiontts",
+        "/content/kiontts",
+    ]:
+        if os.path.exists(os.path.join(p, "model")):
+            return p
         if os.path.exists(p):
             return p
-    return "/content/KionTTS"
+    return "/kaggle/working" if os.path.exists("/kaggle") else "/content/KionTTS"
 
 
 REPO_ROOT       = _get_repo_root()
 STYLETTS2_ROOT  = f"{REPO_ROOT}/StyleTTS2"
-DRIVE_CKPT_DIR  = "/content/drive/MyDrive/KionTTS_Checkpoints"
-DATASET_ROOT    = "/content/dataset/wavs"
+
+if os.path.exists("/kaggle"):
+    DRIVE_CKPT_DIR = "/kaggle/working/checkpoints"
+    DATASET_ROOT   = "/kaggle/working/dataset/wavs"
+elif os.path.exists("/content/drive/MyDrive"):
+    DRIVE_CKPT_DIR = "/content/drive/MyDrive/KionTTS_Checkpoints"
+    DATASET_ROOT   = "/content/dataset/wavs"
+else:
+    DRIVE_CKPT_DIR = os.path.join(REPO_ROOT, "checkpoints")
+    DATASET_ROOT   = os.path.join(REPO_ROOT, "dataset/wavs")
+
 LOG_DIR         = f"{DRIVE_CKPT_DIR}/logs"
 STAGE1_PATH     = f"{DRIVE_CKPT_DIR}/kion_stage1.pth"
 
@@ -35,10 +53,12 @@ def auto_batch_size():
         import torch
         if not torch.cuda.is_available():
             return 2
+        num_gpus = torch.cuda.device_count()
         vram = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)
+        # On Kaggle T4x2, per-GPU batch size is 4 (effective DDP batch size = 8)
         if vram >= 38:   return 16   # A100 40GB
         elif vram >= 22: return 8    # RTX 3090 / 4090 / A10G (24GB)
-        elif vram >= 14: return 4    # T4 / V100 (15GB/16GB) — StyleTTS2 vocoder requires bs=4 on T4
+        elif vram >= 14: return 4    # T4 / V100 (15GB/16GB) — StyleTTS2 vocoder requires bs=4 per T4
         else:            return 2
     except Exception:
         return 2

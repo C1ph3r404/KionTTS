@@ -102,8 +102,54 @@ def unpack_and_generate_manifest(
     return manifest_records
 
 
+import tarfile
+
+def unpack_tar_if_needed(search_dirs: Optional[List[str]] = None, dest_dir: str = "/content/data") -> bool:
+    """Checks for kion_dataset.tar in Kaggle input or common search paths and extracts it."""
+    if search_dirs is None:
+        search_dirs = [
+            "/kaggle/input",
+            "/kaggle/input/kion-dataset",
+            "/kaggle/input/kiontts-dataset",
+            "/kaggle/input/kiontts",
+            "/content/data",
+            "/content",
+            "DatasetGeneration/data",
+            "../DatasetGeneration/data",
+        ]
+    # Check if train zip already exists
+    if os.path.exists(os.path.join(dest_dir, "KionTTS_Dataset_train.zip")):
+        return True
+
+    for sdir in search_dirs:
+        if not os.path.exists(sdir):
+            continue
+        # Search directly or recursively for .tar files
+        candidates = glob.glob(os.path.join(sdir, "**", "*.tar"), recursive=True) + glob.glob(os.path.join(sdir, "*.tar"))
+        for tar_cand in candidates:
+            if "kion" in os.path.basename(tar_cand).lower() or "dataset" in os.path.basename(tar_cand).lower():
+                print(f"[+] Found dataset tar archive at: {tar_cand}")
+                print(f"[*] Extracting tar archive to {dest_dir}...")
+                os.makedirs(dest_dir, exist_ok=True)
+                with tarfile.open(tar_cand, "r") as tar:
+                    tar.extractall(path=dest_dir)
+                print(f"[✓] Tar extraction complete: {dest_dir}")
+                return True
+    return False
+
+
 def find_dataset_zip(filename: str) -> str:
+    # First ensure any tar archives in Kaggle/Colab are extracted
+    dest_data_dir = "/kaggle/working/data" if os.path.exists("/kaggle") else "/content/data"
+    unpack_tar_if_needed(dest_dir=dest_data_dir)
+
     search_paths = [
+        os.path.join(dest_data_dir, filename),
+        os.path.join("/kaggle/working/data", filename),
+        os.path.join("/kaggle/working", filename),
+        os.path.join("/kaggle/input/kion-dataset", filename),
+        os.path.join("/kaggle/input/kiontts-dataset", filename),
+        os.path.join("/kaggle/input", filename),
         os.path.join("/content/data", filename),
         os.path.join("/content/drive/MyDrive", filename),
         os.path.join("/content/drive/MyDrive/KionTTS_Data", filename),
@@ -111,21 +157,36 @@ def find_dataset_zip(filename: str) -> str:
         os.path.join("DatasetGeneration/data", filename),
         os.path.join("../DatasetGeneration/data", filename),
     ]
+    # Also check recursive matches in /kaggle/input
+    if os.path.exists("/kaggle/input"):
+        for root, _, files in os.walk("/kaggle/input"):
+            if filename in files:
+                return os.path.join(root, filename)
+
     for p in search_paths:
         if os.path.exists(p):
             print(f"[+] Found {filename} at: {p}")
             return p
-    return os.path.join("/content/data", filename)
+    return os.path.join(dest_data_dir, filename)
 
 
 def _get_repo_root() -> str:
     rel_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
     if os.path.exists(os.path.join(rel_path, "model")):
         return rel_path
-    for p in ["/content/KionTTS", "/content/Kiontts", "/content/kiontts"]:
+    for p in [
+        "/kaggle/working/KionTTS",
+        "/kaggle/working/kiontts",
+        "/kaggle/working",
+        "/content/KionTTS",
+        "/content/Kiontts",
+        "/content/kiontts",
+    ]:
+        if os.path.exists(os.path.join(p, "model")):
+            return p
         if os.path.exists(p):
             return p
-    return "/content/KionTTS"
+    return "/kaggle/working" if os.path.exists("/kaggle") else "/content/KionTTS"
 
 
 REPO_ROOT = _get_repo_root()
@@ -181,10 +242,16 @@ def generate_styletts2_lists(
 def run_extraction_pipeline(
     train_zip: Optional[str] = None,
     val_zip: Optional[str] = None,
-    wav_dir: str = "/content/dataset/wavs",
-    manifest_dir: str = "/content/dataset",
+    wav_dir: Optional[str] = None,
+    manifest_dir: Optional[str] = None,
     styletts2_data_dir: Optional[str] = None,
 ):
+    base_data = "/kaggle/working/dataset" if os.path.exists("/kaggle") else "/content/dataset"
+    if wav_dir is None:
+        wav_dir = os.path.join(base_data, "wavs")
+    if manifest_dir is None:
+        manifest_dir = base_data
+
     if train_zip is None or not os.path.exists(train_zip):
         train_zip = find_dataset_zip("KionTTS_Dataset_train.zip")
     if val_zip is None or not os.path.exists(val_zip):

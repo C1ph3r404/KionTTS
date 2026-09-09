@@ -50,20 +50,37 @@ torch.load = _compat_torch_load
 
 warnings.simplefilter("ignore")
 
-# ─── Colab Paths ──────────────────────────────────────────────────────────────
+# ─── Colab / Kaggle Paths ─────────────────────────────────────────────────────
 def _get_repo_root() -> str:
     rel_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
     if os.path.exists(os.path.join(rel_path, "model")):
         return rel_path
-    for p in ["/content/KionTTS", "/content/Kiontts", "/content/kiontts"]:
+    for p in [
+        "/kaggle/working/KionTTS",
+        "/kaggle/working/kiontts",
+        "/kaggle/working",
+        "/content/KionTTS",
+        "/content/Kiontts",
+        "/content/kiontts",
+    ]:
+        if os.path.exists(os.path.join(p, "model")):
+            return p
         if os.path.exists(p):
             return p
-    return "/content/KionTTS"
+    return "/kaggle/working" if os.path.exists("/kaggle") else "/content/KionTTS"
 
 
 REPO_ROOT      = _get_repo_root()
 STYLETTS2_ROOT = f"{REPO_ROOT}/StyleTTS2"
-DRIVE_CKPT_DIR = "/content/drive/MyDrive/KionTTS_Checkpoints"
+
+if os.path.exists("/content/drive/MyDrive"):
+    DRIVE_CKPT_DIR = "/content/drive/MyDrive/KionTTS_Checkpoints"
+elif os.path.exists("/kaggle"):
+    DRIVE_CKPT_DIR = "/kaggle/working/checkpoints"
+else:
+    DRIVE_CKPT_DIR = os.path.join(REPO_ROOT, "checkpoints")
+
+LOCAL_CKPT_DIR = DRIVE_CKPT_DIR
 CONFIG_PATH    = f"{STYLETTS2_ROOT}/Configs/kion_config.yml"
 
 # Add StyleTTS2 to Python path

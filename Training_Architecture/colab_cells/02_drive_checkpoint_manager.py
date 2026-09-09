@@ -12,19 +12,57 @@ import torch
 from typing import Optional, Dict, Any, Tuple
 
 
+def _get_hf_token() -> str:
+    try:
+        from google.colab import userdata
+        t = userdata.get('HF_TOKEN')
+        if t: return t.strip()
+    except Exception:
+        pass
+    try:
+        from kaggle_secrets import UserSecretsClient
+        t = UserSecretsClient().get_secret('HF_TOKEN')
+        if t: return t.strip()
+    except Exception:
+        pass
+    for env_var in ["HF_TOKEN", "HUGGING_FACE_HUB_TOKEN"]:
+        val = os.environ.get(env_var, "").strip()
+        if val: return val
+    try:
+        from huggingface_hub import HfFolder
+        cached = HfFolder.get_token()
+        if cached: return cached.strip()
+    except Exception:
+        pass
+    return ""
+
+
 class DriveCheckpointManager:
     """
-    Manages saving and loading model checkpoints to/from Google Drive.
-    Ensures safe atomic writes to avoid data corruption if Colab disconnects.
+    Manages saving and loading model checkpoints to/from local disk, Google Drive,
+    and Hugging Face Model Hub.
     """
 
     def __init__(
         self,
-        checkpoint_dir: str = "/content/drive/MyDrive/KionTTS_Checkpoints",
+        checkpoint_dir: Optional[str] = None,
         keep_last_n: int = 3,
+        hf_repo_id: str = "nate0001/KionTTS-Checkpoints",
+        sync_hf: bool = True,
     ):
+        if checkpoint_dir is None:
+            if os.path.exists("/kaggle"):
+                checkpoint_dir = "/kaggle/working/checkpoints"
+            elif os.path.exists("/content/drive/MyDrive"):
+                checkpoint_dir = "/content/drive/MyDrive/KionTTS_Checkpoints"
+            else:
+                checkpoint_dir = "/content/checkpoints"
+
         self.checkpoint_dir = checkpoint_dir
         self.keep_last_n = keep_last_n
+        self.hf_repo_id = os.environ.get("HF_REPO_ID", hf_repo_id).strip()
+        self.sync_hf = sync_hf
+        self.hf_token = _get_hf_token()
         os.makedirs(self.checkpoint_dir, exist_ok=True)
         self.latest_symlink = os.path.join(self.checkpoint_dir, "latest_checkpoint.pt")
         self.best_checkpoint_path = os.path.join(self.checkpoint_dir, "best_model.pt")

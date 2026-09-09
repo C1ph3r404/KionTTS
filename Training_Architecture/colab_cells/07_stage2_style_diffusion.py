@@ -53,20 +53,38 @@ torch.load = _compat_torch_load
 
 warnings.simplefilter("ignore")
 
-# ─── Colab Paths ─────────────────────────────────────────────────────────────
+# ─── Environment & Repository Paths ──────────────────────────────────────────
 def _get_repo_root() -> str:
     rel_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
     if os.path.exists(os.path.join(rel_path, "model")):
         return rel_path
-    for p in ["/content/KionTTS", "/content/Kiontts", "/content/kiontts"]:
+    for p in [
+        "/kaggle/working/KionTTS",
+        "/kaggle/working/kiontts",
+        "/kaggle/working",
+        "/content/KionTTS",
+        "/content/Kiontts",
+        "/content/kiontts",
+    ]:
+        if os.path.exists(os.path.join(p, "model")):
+            return p
         if os.path.exists(p):
             return p
-    return "/content/KionTTS"
+    return "/kaggle/working" if os.path.exists("/kaggle") else "/content/KionTTS"
 
 
 REPO_ROOT      = _get_repo_root()
 STYLETTS2_ROOT = f"{REPO_ROOT}/StyleTTS2"
-DRIVE_CKPT_DIR = "/content/drive/MyDrive/KionTTS_Checkpoints"
+
+# Checkpoint directory: Drive on Colab if mounted, otherwise local /kaggle/working/checkpoints
+if os.path.exists("/content/drive/MyDrive"):
+    DRIVE_CKPT_DIR = "/content/drive/MyDrive/KionTTS_Checkpoints"
+elif os.path.exists("/kaggle"):
+    DRIVE_CKPT_DIR = "/kaggle/working/checkpoints"
+else:
+    DRIVE_CKPT_DIR = os.path.join(REPO_ROOT, "checkpoints")
+
+LOCAL_CKPT_DIR = DRIVE_CKPT_DIR
 CONFIG_PATH    = f"{STYLETTS2_ROOT}/Configs/kion_config.yml"
 STAGE1_BEST    = os.path.join(DRIVE_CKPT_DIR, "kion_stage1_best.pth")
 STAGE1_FINAL   = os.path.join(DRIVE_CKPT_DIR, "kion_stage1_final.pth")
@@ -76,8 +94,15 @@ for p in [REPO_ROOT, STYLETTS2_ROOT]:
         sys.path.insert(0, p)
 
 
-# ─── Ensure Dependencies (self-healing for active Colab runtimes) ────────────
-for _pkg, _mod in [("munch", "munch"), ("einops-exts", "einops_exts"), ("einops", "einops"), ("pydub", "pydub"), ("nltk", "nltk")]:
+# ─── Ensure Dependencies (self-healing for active Colab/Kaggle runtimes) ─────
+for _pkg, _mod in [
+    ("munch", "munch"),
+    ("einops-exts", "einops_exts"),
+    ("einops", "einops"),
+    ("pydub", "pydub"),
+    ("nltk", "nltk"),
+    ("huggingface_hub", "huggingface_hub"),
+]:
     try:
         __import__(_mod)
     except ImportError:
@@ -146,6 +171,98 @@ class KionStyleConsistencyLoss(nn.Module):
 kion_style_consistency = KionStyleConsistencyLoss()
 
 
+# ─── Hugging Face Hub Credentials & Checkpoint Sync ──────────────────────────
+def _get_hf_token() -> str:
+    """Discovers Hugging Face token from Colab secrets, Kaggle secrets, env vars, or HF cache."""
+    # 1. Colab Secrets
+    try:
+        from google.colab import userdata
+        t = userdata.get('HF_TOKEN')
+        if t: return t.strip()
+    except Exception:
+        pass
+    # 2. Kaggle Secrets
+    try:
+        from kaggle_secrets import UserSecretsClient
+        t = UserSecretsClient().get_secret('HF_TOKEN')
+        if t: return t.strip()
+    except Exception:
+        pass
+    # 3. Environment variables
+    for env_var in ["HF_TOKEN", "HUGGING_FACE_HUB_TOKEN", "HF_AUTH_TOKEN"]:
+        val = os.environ.get(env_var, "").strip()
+        if val:
+            return val
+    # 4. Hugging Face cached token
+    try:
+        from huggingface_hub import HfFolder
+        cached = HfFolder.get_token()
+        if cached:
+            return cached.strip()
+    except Exception:
+        pass
+    return ""
+
+
+HF_TOKEN = _get_hf_token()
+HF_REPO_ID = os.environ.get("HF_REPO_ID", "nate0001/KionTTS-Checkpoints").strip()
+
+
+def _upload_to_hf(local_path: str, hf_filename: str, repo_id: str = HF_REPO_ID, token: str = None) -> bool:
+    """Uploads a checkpoint or metadata file to Hugging Face Model Hub."""
+    token = token or _get_hf_token()
+    if not token:
+        print(f"  [!] HF_TOKEN not configured. Skipping Hugging Face upload for '{hf_filename}'.")
+        print("      To enable automatic HF syncing, set HF_TOKEN in Colab Secrets or Kaggle Secrets.")
+        return False
+    if not os.path.exists(local_path):
+        print(f"  [!] File to upload not found: {local_path}")
+        return False
+    try:
+        from huggingface_hub import HfApi
+        api = HfApi(token=token)
+        # Create private model repo if it doesn't exist
+        api.create_repo(repo_id=repo_id, repo_type="model", exist_ok=True, private=True)
+        size_mb = os.path.getsize(local_path) / (1024 * 1024)
+        print(f"  [*] Uploading '{hf_filename}' ({size_mb:.1f} MB) to HF [{repo_id}]...", flush=True)
+        api.upload_file(
+            path_or_fileobj=local_path,
+            path_in_repo=hf_filename,
+            repo_id=repo_id,
+            repo_type="model",
+        )
+        print(f"  [✓] Upload complete → https://huggingface.co/{repo_id}/blob/main/{hf_filename}")
+        return True
+    except Exception as e:
+        print(f"  [!] HF upload failed for '{hf_filename}': {e}")
+        return False
+
+
+def _download_from_hf(hf_filename: str, local_dest_dir: str = DRIVE_CKPT_DIR, repo_id: str = HF_REPO_ID, token: str = None) -> str | None:
+    """Downloads a checkpoint from Hugging Face Model Hub if not present locally."""
+    token = token or _get_hf_token()
+    try:
+        from huggingface_hub import hf_hub_download
+        os.makedirs(local_dest_dir, exist_ok=True)
+        print(f"  [*] Attempting to download '{hf_filename}' from HF repo [{repo_id}]...", flush=True)
+        dest = hf_hub_download(
+            repo_id=repo_id,
+            filename=hf_filename,
+            token=token or None,
+            local_dir=local_dest_dir,
+            local_dir_use_symlinks=False,
+        )
+        if _is_valid_checkpoint(dest):
+            print(f"  [✓] Successfully downloaded & verified from HF: {dest}")
+            return dest
+        else:
+            print(f"  [!] Checkpoint from HF failed integrity check: {dest}")
+            return None
+    except Exception as e:
+        print(f"  [-] Could not download '{hf_filename}' from HF: {e}")
+        return None
+
+
 # ─── Checkpoint Helpers ───────────────────────────────────────────────────────
 def _is_valid_checkpoint(path: str) -> bool:
     """Verifies that a checkpoint exists, is non-empty, and is a valid zip archive with 0MB RAM footprint."""
@@ -156,7 +273,6 @@ def _is_valid_checkpoint(path: str) -> bool:
             return False
         import zipfile
         with zipfile.ZipFile(path, "r") as zf:
-            # testzip() checks CRC integrity of all archived objects with 0MB tensor allocations
             return zf.testzip() is None
     except Exception as e:
         print(f"  [!] Integrity check failed for '{os.path.basename(path)}': {e}")
@@ -166,39 +282,44 @@ def _is_valid_checkpoint(path: str) -> bool:
 def _save_to_drive(state: dict, epoch: int, step: int = None, is_best: bool = False, stage: str = "stage2", step_interval: int = 900):
     os.makedirs(DRIVE_CKPT_DIR, exist_ok=True)
     if step is not None:
-        # Fixed rolling slots A & B (overwritten in-place, zero files deleted into Drive Trash!)
         slot = "A" if (step // step_interval) % 2 == 0 else "B"
-        ckpt_path = os.path.join(DRIVE_CKPT_DIR, f"kion_{stage}_step_slot_{slot}.pth")
+        file_base = f"kion_{stage}_step_slot_{slot}.pth"
+        ckpt_path = os.path.join(DRIVE_CKPT_DIR, file_base)
     else:
-        # Fixed rolling slots A & B for epochs (overwritten in-place)
         slot = "A" if epoch % 2 == 0 else "B"
-        ckpt_path = os.path.join(DRIVE_CKPT_DIR, f"kion_{stage}_epoch_slot_{slot}.pth")
+        file_base = f"kion_{stage}_epoch_slot_{slot}.pth"
+        ckpt_path = os.path.join(DRIVE_CKPT_DIR, file_base)
 
-    # Safe write: save to persistent local disk (/content or ckpt dir) first, never /tmp (tmpfs in System RAM)
     if step is not None:
-        print(f"\n  [*] Saving step checkpoint {step} (Slot {slot}) to Drive...", flush=True)
+        print(f"\n  [*] Saving step checkpoint {step} (Slot {slot})...", flush=True)
     else:
-        print(f"\n  [*] Saving epoch checkpoint (Epoch {epoch}, Slot {slot}) to Drive...", flush=True)
+        print(f"\n  [*] Saving epoch checkpoint (Epoch {epoch}, Slot {slot})...", flush=True)
 
-    local_dir = "/content" if os.path.exists("/content") else os.path.dirname(ckpt_path)
+    local_dir = "/kaggle/working" if os.path.exists("/kaggle") else ("/content" if os.path.exists("/content") else os.path.dirname(ckpt_path))
     tmp_path = os.path.join(local_dir, f"kion_{stage}_tmp_{int(time.time())}.pth")
     try:
         torch.save(state, tmp_path)
         if _is_valid_checkpoint(tmp_path):
             shutil.copyfile(tmp_path, ckpt_path)
             if step is not None:
-                print(f"\n  [✓] Verified & saved step checkpoint {step} (Slot {slot}) → {ckpt_path}")
+                print(f"  [✓] Verified & saved step checkpoint {step} (Slot {slot}) → {ckpt_path}")
             else:
-                print(f"\n  [✓] Verified & saved epoch checkpoint (Epoch {epoch}, Slot {slot}) → {ckpt_path}")
-            # Update pointer file only on successful verified save
+                print(f"  [✓] Verified & saved epoch checkpoint (Epoch {epoch}, Slot {slot}) → {ckpt_path}")
+
+            # Update local pointer file
             meta_path = os.path.join(DRIVE_CKPT_DIR, f"latest_{stage}_checkpoint.txt")
             try:
                 with open(meta_path, "w") as f:
-                    f.write(f"{ckpt_path}\n")
+                    f.write(f"{file_base}\n")
             except Exception:
                 pass
+
+            # Sync to Hugging Face Hub
+            _upload_to_hf(ckpt_path, file_base)
+            if os.path.exists(meta_path):
+                _upload_to_hf(meta_path, f"latest_{stage}_checkpoint.txt")
         else:
-            print(f"  [!] Local save integrity check failed. Skipping copy to Drive.")
+            print(f"  [!] Local save integrity check failed. Skipping copy to checkpoint directory.")
     finally:
         if os.path.exists(tmp_path):
             try:
@@ -207,9 +328,11 @@ def _save_to_drive(state: dict, epoch: int, step: int = None, is_best: bool = Fa
                 pass
 
     if is_best and os.path.exists(ckpt_path):
-        best_path = os.path.join(DRIVE_CKPT_DIR, f"kion_{stage}_best.pth")
+        best_name = f"kion_{stage}_best.pth"
+        best_path = os.path.join(DRIVE_CKPT_DIR, best_name)
         shutil.copy2(ckpt_path, best_path)
         print(f"  [★] New best! → {best_path}")
+        _upload_to_hf(best_path, best_name)
 
 
 def _find_latest_stage2_checkpoint() -> str | None:
@@ -222,12 +345,15 @@ def _find_latest_stage2_checkpoint() -> str | None:
         try:
             with open(meta_path, "r") as f:
                 target = f.readline().strip()
-                if target and os.path.exists(target):
-                    candidates.append(target)
+                if target:
+                    if not os.path.isabs(target):
+                        target = os.path.join(DRIVE_CKPT_DIR, target)
+                    if os.path.exists(target):
+                        candidates.append(target)
         except Exception:
             pass
 
-    # 2. Check rolling slots and legacy numbered files (sorted newest first)
+    # 2. Check rolling slots and numbered files
     patterns = [
         "kion_stage2_step_slot_*.pth",
         "kion_stage2_epoch_slot_*.pth",
@@ -248,14 +374,26 @@ def _find_latest_stage2_checkpoint() -> str | None:
     if os.path.exists(best_path) and best_path not in candidates:
         candidates.append(best_path)
 
-    # 3. Test candidates for corruption; return newest intact one
+    # 3. Test local candidates for corruption
     for cand in candidates:
         print(f"  Verifying integrity of candidate: {os.path.basename(cand)}...")
         if _is_valid_checkpoint(cand):
             print(f"  [✓] Integrity confirmed: {os.path.basename(cand)}")
             return cand
         else:
-            print(f"  [!] Checkpoint {os.path.basename(cand)} is damaged. Falling back to previous slot...")
+            print(f"  [!] Checkpoint {os.path.basename(cand)} is damaged. Falling back...")
+
+    # 4. If no local candidates found (e.g. Kaggle environment), try Hugging Face Hub
+    print("  [*] No local Stage 2 checkpoint found. Checking Hugging Face Hub...")
+    hf_best = _download_from_hf("kion_stage2_best.pth")
+    if hf_best:
+        return hf_best
+    hf_slot_a = _download_from_hf("kion_stage2_step_slot_A.pth")
+    if hf_slot_a:
+        return hf_slot_a
+    hf_slot_b = _download_from_hf("kion_stage2_step_slot_B.pth")
+    if hf_slot_b:
+        return hf_slot_b
 
     return None
 
@@ -274,8 +412,11 @@ def _load_stage1_checkpoint() -> str:
         try:
             with open(meta_path, "r") as f:
                 target = f.readline().strip()
-                if target and os.path.exists(target) and target not in candidates:
-                    candidates.append(target)
+                if target:
+                    if not os.path.isabs(target):
+                        target = os.path.join(DRIVE_CKPT_DIR, target)
+                    if os.path.exists(target) and target not in candidates:
+                        candidates.append(target)
         except Exception:
             pass
 
@@ -290,9 +431,19 @@ def _load_stage1_checkpoint() -> str:
             print(f"  [✓] Stage 1 checkpoint verified: {os.path.basename(cand)}")
             return cand
 
+    # If no local candidate exists (e.g. running on Kaggle without Drive), pull from HF Hub
+    print("  [*] No valid local Stage 1 checkpoint found. Checking Hugging Face Hub...")
+    hf_s1_best = _download_from_hf("kion_stage1_best.pth")
+    if hf_s1_best:
+        return hf_s1_best
+    hf_s1_final = _download_from_hf("kion_stage1_final.pth")
+    if hf_s1_final:
+        return hf_s1_final
+
     raise FileNotFoundError(
-        "No valid, uncorrupted Stage 1 checkpoint found. Run Cell 06 first.\n"
-        f"Checked candidates: {[os.path.basename(c) for c in candidates]}"
+        "No valid Stage 1 checkpoint found locally, on Drive, or on Hugging Face.\n"
+        f"Checked candidates: {[os.path.basename(c) for c in candidates]}\n"
+        f"Hugging Face repo checked: {HF_REPO_ID}"
     )
 
 
@@ -369,11 +520,66 @@ def _ensure_pretrained_assets(cfg):
             _download_file(url, plbert_ckpt, "Pretrained PL-BERT (step_1000000.t7)")
 
 
+def sync_drive_checkpoints_to_hf(repo_id: str = HF_REPO_ID) -> bool:
+    """Discovers all existing Stage 1 & Stage 2 checkpoints on Drive/disk and uploads them to Hugging Face."""
+    print("\n" + "=" * 65)
+    print("Syncing existing checkpoints from Google Drive to Hugging Face...")
+    print(f"Target Hugging Face Model Hub: https://huggingface.co/{repo_id}")
+    print("=" * 65)
+
+    uploaded_any = False
+
+    # 1. Stage 1 checkpoint
+    try:
+        s1 = _load_stage1_checkpoint()
+        if s1 and os.path.exists(s1):
+            print(f"[+] Found Stage 1 checkpoint: {s1}")
+            _upload_to_hf(s1, "kion_stage1_best.pth", repo_id=repo_id)
+            tmp_ptr = os.path.join(os.path.dirname(s1), "latest_stage1_checkpoint.txt")
+            try:
+                with open(tmp_ptr, "w") as f:
+                    f.write("kion_stage1_best.pth\n")
+                _upload_to_hf(tmp_ptr, "latest_stage1_checkpoint.txt", repo_id=repo_id)
+            except Exception:
+                pass
+            uploaded_any = True
+    except Exception as e:
+        print(f"[-] Stage 1 checkpoint note: {e}")
+
+    # 2. Stage 2 checkpoints
+    try:
+        s2 = _find_latest_stage2_checkpoint()
+        if s2 and os.path.exists(s2):
+            print(f"[+] Found latest Stage 2 checkpoint: {s2}")
+            _upload_to_hf(s2, os.path.basename(s2), repo_id=repo_id)
+            _upload_to_hf(s2, "kion_stage2_latest.pth", repo_id=repo_id)
+            uploaded_any = True
+    except Exception as e:
+        print(f"[-] Stage 2 checkpoint note: {e}")
+
+    # 3. Best Stage 2 if present
+    best_s2 = os.path.join(DRIVE_CKPT_DIR, "kion_stage2_best.pth")
+    if os.path.exists(best_s2):
+        print(f"[+] Found Stage 2 best checkpoint: {best_s2}")
+        _upload_to_hf(best_s2, "kion_stage2_best.pth", repo_id=repo_id)
+        uploaded_any = True
+
+    if uploaded_any:
+        print(f"\n[✓] Checkpoint sync complete! Kaggle can now pull directly from: https://huggingface.co/{repo_id}")
+    else:
+        print("\n[!] No local or Drive checkpoints were found to upload.")
+    return uploaded_any
+
+
 # ─── Main Training Function ───────────────────────────────────────────────────
-def run_stage2_training(config_path: str = CONFIG_PATH):
+def run_stage2_training(config_path: str = CONFIG_PATH, sync_hf_first: bool = True):
     print("=" * 65)
     print("KionTTS — Stage 2: Style Diffusion + Adapter Training")
     print("=" * 65)
+
+    # Automatically sync existing checkpoints from Drive to HF before starting training
+    if sync_hf_first and os.path.exists("/content/drive/MyDrive"):
+        sync_drive_checkpoints_to_hf()
 
     import gc
     gc.collect()
@@ -497,6 +703,17 @@ def run_stage2_training(config_path: str = CONFIG_PATH):
     # Stage 2 predictor_encoder is initialised from Stage 1 style_encoder weights
     model["predictor_encoder"] = copy.deepcopy(model["style_encoder"])
 
+    # ── Immediate Hugging Face Sync for Stage 1 Checkpoint ───────────────────
+    print("\n  [*] Syncing verified Stage 1 checkpoint to Hugging Face Model Hub...", flush=True)
+    _upload_to_hf(stage1_ckpt, "kion_stage1_best.pth")
+    tmp_s1_ptr = os.path.join(os.path.dirname(stage1_ckpt), "latest_stage1_checkpoint.txt")
+    try:
+        with open(tmp_s1_ptr, "w") as f:
+            f.write("kion_stage1_best.pth\n")
+        _upload_to_hf(tmp_s1_ptr, "latest_stage1_checkpoint.txt")
+    except Exception:
+        pass
+
     # ── Optimisers — separate Generator and Discriminator ─────────────────────
     opt_params  = config["optimizer_params"]
     lr          = float(opt_params.get("lr", 1e-4))
@@ -538,6 +755,9 @@ def run_stage2_training(config_path: str = CONFIG_PATH):
     latest_s2   = _find_latest_stage2_checkpoint()
     if latest_s2:
         print(f"  Resuming Stage 2 from: {latest_s2}")
+        print("\n  [*] Syncing resumed Stage 2 checkpoint to Hugging Face...", flush=True)
+        _upload_to_hf(latest_s2, os.path.basename(latest_s2))
+        _upload_to_hf(latest_s2, "kion_stage2_latest.pth")
         ckpt = torch.load(latest_s2, map_location=device)
         for k in model:
             if "net" in ckpt and k in ckpt["net"]:
@@ -976,8 +1196,19 @@ def run_stage2_training(config_path: str = CONFIG_PATH):
         "config":      config,
     }, final_path)
     print(f"  Final checkpoint → {final_path}")
+    _upload_to_hf(final_path, "kion_stage2_final.pth")
     print("  Proceed to Cell 08 for inference testing.")
 
 
 if __name__ == "__main__":
-    run_stage2_training()
+    import argparse
+    parser = argparse.ArgumentParser(description="KionTTS Stage 2 Training & Hugging Face Checkpoint Sync")
+    parser.add_argument("--upload-only", action="store_true", help="Upload existing Drive checkpoints to Hugging Face and exit")
+    parser.add_argument("--repo-id", default=HF_REPO_ID, help="Target Hugging Face Model Repository ID")
+    parser.add_argument("--config", default=CONFIG_PATH, help="Path to kion_config.yml")
+    args = parser.parse_args()
+
+    if args.upload_only:
+        sync_drive_checkpoints_to_hf(repo_id=args.repo_id)
+    else:
+        run_stage2_training(config_path=args.config)

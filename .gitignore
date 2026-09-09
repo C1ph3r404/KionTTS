@@ -12,6 +12,7 @@ ENV/
 
 # Large Datasets & Archives
 *.zip
+*.tar
 *.tar.gz
 *.7z
 DatasetGeneration/data/
