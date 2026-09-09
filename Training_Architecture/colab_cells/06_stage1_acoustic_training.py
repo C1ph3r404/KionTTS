@@ -495,10 +495,13 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
 
         if latest_ckpt:
             print(f"  Resuming from Drive checkpoint: {latest_ckpt}")
-            model, optimizer, start_epoch, iters = load_checkpoint(
+            model, optimizer, _, iters = load_checkpoint(
                 model, optimizer, latest_ckpt, load_only_params=False
             )
-            print(f"  [✓] Resumed state successfully: starting at epoch {start_epoch + 1}, step {iters}")
+            steps_per_epoch = len(train_dataloader)
+            start_epoch = iters // steps_per_epoch
+            step_in_ep  = iters % steps_per_epoch
+            print(f"  [✓] Resumed state successfully: starting at epoch {start_epoch + 1}, step {iters} ({step_in_ep}/{steps_per_epoch} in current epoch)")
         elif pretrained:
             print(f"  Loading pretrained model: {pretrained}")
             model, optimizer, start_epoch, iters = load_checkpoint(
@@ -538,22 +541,20 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
         running_loss = 0.0
         _ = [model[k].train() for k in stage1_active_keys if k in model]
 
-        total_steps_in_loader = len(train_dataloader)
-        if epoch == start_epoch and (iters % total_steps_in_loader) != 0:
-            remaining_steps = total_steps_in_loader - (iters % total_steps_in_loader)
-        else:
-            remaining_steps = total_steps_in_loader
+        steps_per_epoch = len(train_dataloader)
+        steps_to_skip = (iters % steps_per_epoch) if epoch == start_epoch else 0
 
         pbar = tqdm(
             train_dataloader,
-            total=remaining_steps,
+            total=steps_per_epoch,
+            initial=steps_to_skip,
             desc=f"Epoch {epoch+1:03d}/{epochs} [Stage 1]",
             leave=False,
         )
 
         for i, batch in enumerate(pbar):
-            if i >= remaining_steps:
-                break
+            if epoch == start_epoch and i < steps_to_skip:
+                continue
 
             waves = batch[0]
             batch = [b.to(device, non_blocking=True) for b in batch[1:]]

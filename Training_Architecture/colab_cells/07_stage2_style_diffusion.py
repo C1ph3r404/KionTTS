@@ -546,10 +546,12 @@ def run_stage2_training(config_path: str = CONFIG_PATH):
                 optimizer_g.load_state_dict(ckpt["optimizer"])
             except Exception:
                 pass
-        start_epoch = ckpt.get("epoch", 0) + 1
         iters       = ckpt.get("iters", 0)
+        steps_per_epoch = len(train_dataloader)
+        start_epoch = iters // steps_per_epoch
+        step_in_ep  = iters % steps_per_epoch
         best_loss   = ckpt.get("val_loss", float("inf"))
-        print(f"  [✓] Resumed state successfully: starting at epoch {start_epoch + 1}, step {iters}")
+        print(f"  [✓] Resumed state successfully: starting at epoch {start_epoch + 1}, step {iters} ({step_in_ep}/{steps_per_epoch} in current epoch)")
 
     # ── Loss modules ──────────────────────────────────────────────────────────
     try:
@@ -603,22 +605,20 @@ def run_stage2_training(config_path: str = CONFIG_PATH):
         # Discriminator starts when style diffusion activates (diff_epoch)
         start_ds = (epoch >= diff_epoch)
 
-        total_steps_in_loader = len(train_dataloader)
-        if epoch == start_epoch and (iters % total_steps_in_loader) != 0:
-            remaining_steps = total_steps_in_loader - (iters % total_steps_in_loader)
-        else:
-            remaining_steps = total_steps_in_loader
+        steps_per_epoch = len(train_dataloader)
+        steps_to_skip = (iters % steps_per_epoch) if epoch == start_epoch else 0
 
         pbar = tqdm(
             train_dataloader,
-            total=remaining_steps,
+            total=steps_per_epoch,
+            initial=steps_to_skip,
             desc=f"Epoch {epoch+1:03d}/{epochs} [Stage 2]",
             leave=False,
         )
 
         for i, batch in enumerate(pbar):
-            if i >= remaining_steps:
-                break
+            if epoch == start_epoch and i < steps_to_skip:
+                continue
 
             waves = batch[0]
             batch = [b.to(device, non_blocking=True) for b in batch[1:]]
