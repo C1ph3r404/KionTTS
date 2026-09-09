@@ -409,30 +409,31 @@ print(f"[✓] KionTTS Config successfully generated at: {config_path}")""")
     # Cell 9: Stage 1 Training
     add_md("""## 9. Stage 1 Training: Acoustic Foundation (Accelerate Multi-GPU)
 Trains TextEncoder + Decoder (iSTFTNet) + StyleEncoder.
-- Runs distributed across **both Tesla T4 GPUs** via Hugging Face `accelerate`.
-- Checkpoints are saved locally and synced to Hugging Face Model Hub.""")
+- **Auto-check**: If `kion_stage1_best.pth` is found on Hugging Face (uploaded from Colab), Stage 1 training is **automatically skipped**!
+- If no checkpoint exists, runs distributed training across **both Tesla T4 GPUs** via Hugging Face `accelerate`.""")
 
-    add_code("""import subprocess
+    add_code("""import os
+import subprocess
 
 print("=" * 60)
-print("Starting Stage 1 Acoustic Foundation Training...")
+print("Stage 1 Acoustic Foundation Check & Training...")
 print("=" * 60)
 
-# Check if Stage 1 is already trained / available on Hugging Face
+# 1. Check if Stage 1 is already completed on Hugging Face or locally
 stage1_ckpt = hf_manager.download_checkpoint("kion_stage1_best.pth")
-if stage1_ckpt and os.path.exists(stage1_ckpt):
-    print(f"[✓] Stage 1 checkpoint already available: {stage1_ckpt}")
-    print("    You can proceed directly to Stage 2, or run Stage 1 to continue fine-tuning.")
+if not stage1_ckpt:
+    stage1_ckpt = hf_manager.download_checkpoint("kion_stage1_final.pth")
 
-# Command to launch multi-GPU training via Accelerate on Kaggle T4x2:
-cmd_stage1 = f\"\"\"accelerate launch --multi_gpu --num_processes 2 \\
+if stage1_ckpt and os.path.exists(stage1_ckpt) and os.path.getsize(stage1_ckpt) > 1024 * 1024:
+    print(f"\\n[✓] STAGE 1 IS ALREADY COMPLETED!")
+    print(f"    Found verified Stage 1 checkpoint: {stage1_ckpt} ({os.path.getsize(stage1_ckpt)/(1024*1024):.1f} MB)")
+    print("    Skipping Stage 1 training automatically. Proceed directly to Cell 10 for Stage 2!")
+else:
+    print("\\n[*] No Stage 1 checkpoint found. Starting dual-GPU Stage 1 training on T4x2...")
+    cmd_stage1 = f\"\"\"accelerate launch --multi_gpu --num_processes 2 \\
   {REPO_DIR}/Training_Architecture/colab_cells/06_stage1_acoustic_training.py
 \"\"\"
-print("To run multi-GPU Stage 1 training, execute:")
-print(cmd_stage1)
-
-# Run Stage 1 training:
-subprocess.run(cmd_stage1, shell=True, check=False)""")
+    subprocess.run(cmd_stage1, shell=True, check=False)""")
 
     # Cell 10: Stage 2 Training
     add_md("""## 10. Stage 2 Training: Style Diffusion & KionStyleAdapter
@@ -440,19 +441,32 @@ Trains the `KionStyleAdapter`, `DiffusionSampler`, and `ProsodyPredictor`.
 - Automatically pulls the Stage 1 checkpoint (`kion_stage1_best.pth`) uploaded from Colab!
 - Periodically saves step & epoch checkpoints to `/kaggle/working/checkpoints` and syncs them to Hugging Face Model Hub.""")
 
-    add_code("""import subprocess
+    add_code("""import os
+import sys
+import subprocess
 
 print("=" * 60)
-print("Starting Stage 2 Style Diffusion & KionStyleAdapter Training...")
+print("Stage 2 Style Diffusion & KionStyleAdapter Training...")
 print("=" * 60)
 
-# Ensure Stage 1 checkpoint is pulled from HF if not present locally
+# Verify Stage 1 checkpoint is present before training
 s1_local = "/kaggle/working/checkpoints/kion_stage1_best.pth"
 if not os.path.exists(s1_local):
     print("[*] Pulling Stage 1 checkpoint from Hugging Face...")
-    hf_manager.download_checkpoint("kion_stage1_best.pth")
+    s1_local = hf_manager.download_checkpoint("kion_stage1_best.pth")
+    if not s1_local:
+        s1_local = hf_manager.download_checkpoint("kion_stage1_final.pth")
 
-# Run Stage 2 training script (which now auto-syncs checkpoints to HF)
+if not s1_local or not os.path.exists(s1_local):
+    raise FileNotFoundError(
+        "Stage 1 checkpoint was NOT found on disk or Hugging Face! "
+        "Make sure you uploaded it from Colab (Cell 07 --upload-only) or ran Cell 9."
+    )
+
+print(f"[✓] Stage 1 checkpoint verified: {s1_local} ({os.path.getsize(s1_local)/(1024*1024):.1f} MB)")
+print("[*] Launching Stage 2 training...")
+
+# Run Stage 2 training script (which auto-syncs checkpoints to HF)
 cmd_stage2 = f"{sys.executable} {REPO_DIR}/Training_Architecture/colab_cells/07_stage2_style_diffusion.py"
 subprocess.run(cmd_stage2, shell=True, check=False)""")
 
