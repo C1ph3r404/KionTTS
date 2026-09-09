@@ -1205,8 +1205,13 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="KionTTS Stage 2 Training & Hugging Face Checkpoint Sync")
     parser.add_argument("--upload-only", action="store_true", help="Upload existing Drive checkpoints to Hugging Face and exit")
     parser.add_argument("--repo-id", default=HF_REPO_ID, help="Target Hugging Face Model Repository ID")
+    parser.add_argument("--token", default=None, help="Hugging Face write token (e.g. --token $hf_token)")
     parser.add_argument("--config", default=CONFIG_PATH, help="Path to kion_config.yml")
     args = parser.parse_args()
+
+    if args.token:
+        os.environ["HF_TOKEN"] = args.token.strip()
+        HF_TOKEN = args.token.strip()
 
     if args.upload_only:
         sync_drive_checkpoints_to_hf(repo_id=args.repo_id)
