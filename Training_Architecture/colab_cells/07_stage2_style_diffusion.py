@@ -163,11 +163,11 @@ def _is_valid_checkpoint(path: str) -> bool:
         return False
 
 
-def _save_to_drive(state: dict, epoch: int, step: int = None, is_best: bool = False, stage: str = "stage2"):
+def _save_to_drive(state: dict, epoch: int, step: int = None, is_best: bool = False, stage: str = "stage2", step_interval: int = 900):
     os.makedirs(DRIVE_CKPT_DIR, exist_ok=True)
     if step is not None:
         # Fixed rolling slots A & B (overwritten in-place, zero files deleted into Drive Trash!)
-        slot = "A" if (step // 200) % 2 == 0 else "B"
+        slot = "A" if (step // step_interval) % 2 == 0 else "B"
         ckpt_path = os.path.join(DRIVE_CKPT_DIR, f"kion_{stage}_step_slot_{slot}.pth")
     else:
         # Fixed rolling slots A & B for epochs (overwritten in-place)
@@ -391,7 +391,7 @@ def run_stage2_training(config_path: str = CONFIG_PATH):
     epochs              = config.get("epochs_2nd", 60)
     batch_size          = config.get("batch_size", 2)
     max_len             = config.get("max_len", 200)
-    save_step_interval  = config.get("save_step_interval", 200)
+    save_step_interval  = config.get("save_step_interval", 900)
     sr                  = config["preprocess_params"].get("sr", 24000)
     slmadv_cfg          = Munch(config.get("slmadv_params", {}))
     device              = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -825,7 +825,7 @@ def run_stage2_training(config_path: str = CONFIG_PATH):
                     diff=f"{loss_diff.item():.4f}" if epoch >= diff_epoch else "—",
                 )
 
-                # ── Checkpoint every save_step_interval (200) steps ──
+                # ── Checkpoint every save_step_interval (900) steps ──
                 if iters % save_step_interval == 0:
                     state = {
                         "net":         {k: model[k].state_dict() for k in model},
@@ -835,7 +835,7 @@ def run_stage2_training(config_path: str = CONFIG_PATH):
                         "val_loss":    loss_mel.item(),
                         "epoch":       epoch,
                     }
-                    _save_to_drive(state, epoch=epoch + 1, step=iters, stage="stage2")
+                    _save_to_drive(state, epoch=epoch + 1, step=iters, stage="stage2", step_interval=save_step_interval)
                     del state
                     import gc
                     gc.collect()

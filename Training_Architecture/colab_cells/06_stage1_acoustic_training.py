@@ -147,11 +147,11 @@ def _is_valid_checkpoint(path: str) -> bool:
         return False
 
 
-def _save_to_drive(state: dict, epoch: int, step: int = None, is_best: bool = False):
+def _save_to_drive(state: dict, epoch: int, step: int = None, is_best: bool = False, step_interval: int = 900):
     os.makedirs(DRIVE_CKPT_DIR, exist_ok=True)
     if step is not None:
         # Fixed rolling slots A & B (overwritten in-place, zero files deleted into Drive Trash!)
-        slot = "A" if (step // 1000) % 2 == 0 else "B"
+        slot = "A" if (step // step_interval) % 2 == 0 else "B"
         ckpt_path = os.path.join(DRIVE_CKPT_DIR, f"kion_stage1_step_slot_{slot}.pth")
     else:
         # Fixed rolling slots A & B for epochs (overwritten in-place)
@@ -345,7 +345,7 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
     batch_size          = config.get("batch_size", 2)
     epochs              = config.get("epochs_1st", 120)
     save_freq           = 1  # Checkpoint every 1 epoch to ensure progress is saved to Drive
-    save_step_interval  = config.get("save_step_interval", 1000)  # Checkpoint every 1000 steps
+    save_step_interval  = config.get("save_step_interval", 900)  # Checkpoint every 900 steps
     log_interval        = config.get("log_interval", 10)
     max_len             = config.get("max_len", 200)
     loss_params         = Munch(config["loss_params"])
@@ -691,7 +691,7 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
                     gen=f"{_to_num(loss_gen_all):.4f}",
                 )
 
-            # ── Checkpoint every save_step_interval (1000) steps ──
+            # ── Checkpoint every save_step_interval (900) steps ──
             if iters % save_step_interval == 0 and accelerator.is_main_process:
                 current_running = accelerator.gather(running_loss).mean().item() if hasattr(running_loss, "item") else float(running_loss)
                 state = {
@@ -701,7 +701,7 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
                     "val_loss":  current_running / max((i % log_interval) + 1, 1),
                     "epoch":     epoch,  # In-progress epoch
                 }
-                _save_to_drive(state, epoch=epoch + 1, step=iters)
+                _save_to_drive(state, epoch=epoch + 1, step=iters, step_interval=save_step_interval)
 
             if (i + 1) % log_interval == 0 and accelerator.is_main_process:
                 avg = accelerator.gather(running_loss).mean().item() / log_interval
