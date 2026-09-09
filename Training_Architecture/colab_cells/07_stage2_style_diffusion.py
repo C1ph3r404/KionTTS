@@ -175,6 +175,11 @@ def _save_to_drive(state: dict, epoch: int, step: int = None, is_best: bool = Fa
         ckpt_path = os.path.join(DRIVE_CKPT_DIR, f"kion_{stage}_epoch_slot_{slot}.pth")
 
     # Safe write: save to persistent local disk (/content or ckpt dir) first, never /tmp (tmpfs in System RAM)
+    if step is not None:
+        print(f"\n  [*] Saving step checkpoint {step} (Slot {slot}) to Drive...", flush=True)
+    else:
+        print(f"\n  [*] Saving epoch checkpoint (Epoch {epoch}, Slot {slot}) to Drive...", flush=True)
+
     local_dir = "/content" if os.path.exists("/content") else os.path.dirname(ckpt_path)
     tmp_path = os.path.join(local_dir, f"kion_{stage}_tmp_{int(time.time())}.pth")
     try:
@@ -685,7 +690,9 @@ def run_stage2_training(config_path: str = CONFIG_PATH):
 
                     with torch.no_grad():
                         real_norm     = log_norm(gt.unsqueeze(1)).squeeze(1).detach()
+                        real_norm     = torch.nan_to_num(real_norm, nan=0.0, posinf=10.0, neginf=-10.0)
                         F0_real, _, _ = model["pitch_extractor"](gt.unsqueeze(1))
+                        F0_real       = torch.nan_to_num(F0_real, nan=0.0)
 
                     # ── Duration & CE loss (vectorized on GPU, zero CPU-GPU sync stalls) ──
                     loss_ce, loss_dur = 0.0, 0.0
@@ -714,14 +721,17 @@ def run_stage2_training(config_path: str = CONFIG_PATH):
                     loss_F0   = (F.smooth_l1_loss(F0_pred, F0_real)) / 10.0
                     loss_norm = F.smooth_l1_loss(N_pred, real_norm)
 
-                    # ── Decoder (Monitored in FP32 with clamping) ──────────
+                    # ── Decoder (Monitored in true FP32 with clamping) ─────
                     # In Phase 1 & 2 (before joint_epoch), decoder weights are fixed to the
                     # pre-trained Stage 1 acoustic checkpoint. We evaluate loss_mel under no_grad
-                    # in FP32 with [-1, 1] clamping to guarantee zero NaN/inf issues and 0s backprop latency.
-                    with torch.no_grad():
-                        y_rec = model["decoder"](en, F0_real, real_norm, s_audio)
-                        y_rec_clamped = torch.clamp(y_rec.squeeze(1).float(), -1.0, 1.0)
+                    # in pure FP32 with nan_to_num and [-1, 1] clamping to guarantee zero NaN/inf issues.
+                    with torch.no_grad(), torch.amp.autocast("cuda", enabled=False):
+                        y_rec = model["decoder"](en.float(), F0_real.float(), real_norm.float(), s_audio.float())
+                        y_rec_clean = torch.nan_to_num(y_rec.squeeze(1).float(), nan=0.0, posinf=1.0, neginf=-1.0)
+                        y_rec_clamped = torch.clamp(y_rec_clean, -1.0, 1.0)
                         loss_mel = stft_loss(y_rec_clamped, wav.detach().float())
+                        if torch.isnan(loss_mel) or torch.isinf(loss_mel):
+                            loss_mel = torch.tensor(0.0, device=device)
 
                     # ── GAN & SLM ─────────────────────────────────────────
                     if start_ds:
