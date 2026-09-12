@@ -838,6 +838,8 @@ def run_stage2_training(config_path: str = CONFIG_PATH, sync_hf_first: bool = Tr
 
         steps_per_epoch = len(train_dataloader)
         steps_to_skip = (iters % steps_per_epoch) if epoch == start_epoch else 0
+        if steps_to_skip > 0:
+            print(f"  [*] Fast-forwarding dataloader to step {steps_to_skip}/{steps_per_epoch} (please wait ~30-60s)...", flush=True)
 
         pbar = tqdm(
             train_dataloader,
@@ -847,6 +849,7 @@ def run_stage2_training(config_path: str = CONFIG_PATH, sync_hf_first: bool = Tr
             leave=False,
         )
 
+        first_step_after_resume = (start_epoch * steps_per_epoch + steps_to_skip + 1)
         for i, batch in enumerate(pbar):
             if epoch == start_epoch and i < steps_to_skip:
                 continue
@@ -1050,6 +1053,11 @@ def run_stage2_training(config_path: str = CONFIG_PATH, sync_hf_first: bool = Tr
                     F0=f"{loss_F0.item():.4f}",
                     diff=f"{loss_diff.item():.4f}" if epoch >= diff_epoch else "—",
                 )
+
+                if iters % 50 == 0 or iters == first_step_after_resume:
+                    diff_str = f"{loss_diff.item():.4f}" if epoch >= diff_epoch else "—"
+                    dur_val = loss_dur.item() if hasattr(loss_dur, "item") else float(loss_dur)
+                    print(f"  [Epoch {epoch+1:02d}/{epochs} | Step {iters:05d}] Mel: {loss_mel.item():.4f} | F0: {loss_F0.item():.4f} | Dur: {dur_val:.4f} | Diff: {diff_str}", flush=True)
 
                 # ── Checkpoint every save_step_interval (900) steps ──
                 if iters % save_step_interval == 0:
