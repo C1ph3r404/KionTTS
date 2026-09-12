@@ -1108,6 +1108,7 @@ def run_stage2_training(config_path: str = CONFIG_PATH, sync_hf_first: bool = Tr
         _ = [model[k].eval() for k in model]
         val_loss = 0.0
         n_val    = 0
+        sample_data = None
 
         with torch.no_grad():
             for batch in val_dataloader:
@@ -1144,6 +1145,16 @@ def run_stage2_training(config_path: str = CONFIG_PATH, sync_hf_first: bool = Tr
                 loss_mel      = stft_loss(y_rec.squeeze(), wav_v.detach())
                 val_loss     += loss_mel.item()
                 n_val        += 1
+
+                # Capture first batch for sample audio generation before cleanup
+                if sample_data is None and len(en) > 0:
+                    sample_data = {
+                        "mels": mels.detach().cpu(),
+                        "asr": asr.detach().cpu(),
+                        "mel_input_length": mel_input_length.detach().cpu(),
+                        "count": len(en),
+                    }
+
                 del waves, batch, en, gt, wav_v
 
         val_loss /= max(n_val, 1)
@@ -1161,27 +1172,40 @@ def run_stage2_training(config_path: str = CONFIG_PATH, sync_hf_first: bool = Tr
         )
         writer.add_scalar("s2/val_mel_loss", val_loss, epoch + 1)
 
-        # Write sample audio to Google Drive and TensorBoard every epoch
-        sample_dir = os.path.join(DRIVE_CKPT_DIR, "samples")
-        os.makedirs(sample_dir, exist_ok=True)
-        with torch.no_grad():
-            for bib in range(min(3, len(en))):
-                ml  = int(mel_input_length[bib].item())
-                g   = mels[bib, :, :ml].unsqueeze(0)
-                e   = asr[bib, :, :ml // 2].unsqueeze(0)
-                F0r, _, _ = model["pitch_extractor"](g.unsqueeze(1))
-                s_  = model["style_encoder"](g.unsqueeze(1))
-                nr  = log_norm(g.unsqueeze(1)).squeeze(1)
-                yr  = model["decoder"](e, F0r.unsqueeze(0), nr, s_)
-                audio_arr = yr.cpu().numpy().squeeze()
-                writer.add_audio(f"s2/synth_{bib}", audio_arr, epoch + 1, sample_rate=sr)
-                try:
-                    import soundfile as sf
-                    wav_path = os.path.join(sample_dir, f"kion_stage2_epoch_{epoch+1:03d}_sample_{bib+1}.wav")
-                    sf.write(wav_path, audio_arr, sr)
-                except Exception:
-                    pass
-        print(f"  [♫] Saved {min(3, len(en))} audio samples → {sample_dir}")
+        # Write sample audio to Checkpoint directory and TensorBoard every epoch
+        if sample_data is not None:
+            sample_dir = os.path.join(DRIVE_CKPT_DIR, "samples")
+            os.makedirs(sample_dir, exist_ok=True)
+            num_samples = min(3, sample_data["count"])
+            with torch.no_grad():
+                s_mels = sample_data["mels"].to(device)
+                s_asr  = sample_data["asr"].to(device)
+                s_lens = sample_data["mel_input_length"]
+                for bib in range(num_samples):
+                    ml  = int(s_lens[bib].item())
+                    g   = s_mels[bib, :, :ml].unsqueeze(0)
+                    e   = s_asr[bib, :, :ml // 2].unsqueeze(0)
+                    F0r, _, _ = model["pitch_extractor"](g.unsqueeze(1))
+                    s_  = model["style_encoder"](g.unsqueeze(1))
+                    nr  = log_norm(g.unsqueeze(1)).squeeze(1)
+                    if F0r.dim() == 1:
+                        F0r = F0r.unsqueeze(0)
+                    if nr.dim() == 1:
+                        nr = nr.unsqueeze(0)
+                    yr  = model["decoder"](e, F0r, nr, s_)
+                    audio_arr = yr.cpu().numpy().squeeze()
+                    max_val = np.abs(audio_arr).max()
+                    if max_val > 1.0:
+                        audio_arr = audio_arr / (max_val + 1e-6)
+                    writer.add_audio(f"s2/synth_{bib}", audio_arr, epoch + 1, sample_rate=sr)
+                    try:
+                        import soundfile as sf
+                        wav_path = os.path.join(sample_dir, f"kion_stage2_epoch_{epoch+1:03d}_sample_{bib+1}.wav")
+                        sf.write(wav_path, audio_arr, sr)
+                    except Exception:
+                        pass
+                del s_mels, s_asr, sample_data
+            print(f"  [♫] Saved {num_samples} audio samples → {sample_dir}")
 
         scheduler_g.step()
         scheduler_d.step()
