@@ -521,7 +521,10 @@ def _ensure_pretrained_assets(cfg):
 
 
 def sync_drive_checkpoints_to_hf(repo_id: str = HF_REPO_ID) -> bool:
-    """Discovers all existing Stage 1 & Stage 2 checkpoints on Drive/disk and uploads them to Hugging Face."""
+    """Discovers existing Stage 1 & Stage 2 checkpoints on Google Drive and uploads them to Hugging Face."""
+    if not os.path.exists("/content/drive/MyDrive"):
+        return False
+
     print("\n" + "=" * 65)
     print("Syncing existing checkpoints from Google Drive to Hugging Face...")
     print(f"Target Hugging Face Model Hub: https://huggingface.co/{repo_id}")
@@ -529,11 +532,11 @@ def sync_drive_checkpoints_to_hf(repo_id: str = HF_REPO_ID) -> bool:
 
     uploaded_any = False
 
-    # 1. Stage 1 checkpoint
+    # 1. Stage 1 checkpoint from Drive
     try:
         s1 = _load_stage1_checkpoint()
-        if s1 and os.path.exists(s1):
-            print(f"[+] Found Stage 1 checkpoint: {s1}")
+        if s1 and os.path.exists(s1) and s1.startswith("/content/drive"):
+            print(f"[+] Found Stage 1 checkpoint on Drive: {s1}")
             _upload_to_hf(s1, "kion_stage1_best.pth", repo_id=repo_id)
             tmp_ptr = os.path.join(os.path.dirname(s1), "latest_stage1_checkpoint.txt")
             try:
@@ -546,28 +549,28 @@ def sync_drive_checkpoints_to_hf(repo_id: str = HF_REPO_ID) -> bool:
     except Exception as e:
         print(f"[-] Stage 1 checkpoint note: {e}")
 
-    # 2. Stage 2 checkpoints
+    # 2. Stage 2 checkpoints from Drive
     try:
         s2 = _find_latest_stage2_checkpoint()
-        if s2 and os.path.exists(s2):
-            print(f"[+] Found latest Stage 2 checkpoint: {s2}")
+        if s2 and os.path.exists(s2) and s2.startswith("/content/drive"):
+            print(f"[+] Found latest Stage 2 checkpoint on Drive: {s2}")
             _upload_to_hf(s2, os.path.basename(s2), repo_id=repo_id)
             _upload_to_hf(s2, "kion_stage2_latest.pth", repo_id=repo_id)
             uploaded_any = True
     except Exception as e:
         print(f"[-] Stage 2 checkpoint note: {e}")
 
-    # 3. Best Stage 2 if present
+    # 3. Best Stage 2 if present on Drive
     best_s2 = os.path.join(DRIVE_CKPT_DIR, "kion_stage2_best.pth")
-    if os.path.exists(best_s2):
-        print(f"[+] Found Stage 2 best checkpoint: {best_s2}")
+    if os.path.exists(best_s2) and best_s2.startswith("/content/drive"):
+        print(f"[+] Found Stage 2 best checkpoint on Drive: {best_s2}")
         _upload_to_hf(best_s2, "kion_stage2_best.pth", repo_id=repo_id)
         uploaded_any = True
 
     if uploaded_any:
         print(f"\n[✓] Checkpoint sync complete! Kaggle can now pull directly from: https://huggingface.co/{repo_id}")
     else:
-        print("\n[!] No local or Drive checkpoints were found to upload.")
+        print("\n[*] No un-synced Drive checkpoints found to upload.")
     return uploaded_any
 
 
@@ -703,16 +706,17 @@ def run_stage2_training(config_path: str = CONFIG_PATH, sync_hf_first: bool = Tr
     # Stage 2 predictor_encoder is initialised from Stage 1 style_encoder weights
     model["predictor_encoder"] = copy.deepcopy(model["style_encoder"])
 
-    # ── Immediate Hugging Face Sync for Stage 1 Checkpoint ───────────────────
-    print("\n  [*] Syncing verified Stage 1 checkpoint to Hugging Face Model Hub...", flush=True)
-    _upload_to_hf(stage1_ckpt, "kion_stage1_best.pth")
-    tmp_s1_ptr = os.path.join(os.path.dirname(stage1_ckpt), "latest_stage1_checkpoint.txt")
-    try:
-        with open(tmp_s1_ptr, "w") as f:
-            f.write("kion_stage1_best.pth\n")
-        _upload_to_hf(tmp_s1_ptr, "latest_stage1_checkpoint.txt")
-    except Exception:
-        pass
+    # ── Hugging Face Sync for Stage 1 Checkpoint (ONLY if loaded from Google Drive) ────
+    if os.path.exists("/content/drive/MyDrive") and stage1_ckpt.startswith("/content/drive"):
+        print("\n  [*] Syncing verified Stage 1 checkpoint from Drive to Hugging Face Model Hub...", flush=True)
+        _upload_to_hf(stage1_ckpt, "kion_stage1_best.pth")
+        tmp_s1_ptr = os.path.join(os.path.dirname(stage1_ckpt), "latest_stage1_checkpoint.txt")
+        try:
+            with open(tmp_s1_ptr, "w") as f:
+                f.write("kion_stage1_best.pth\n")
+            _upload_to_hf(tmp_s1_ptr, "latest_stage1_checkpoint.txt")
+        except Exception:
+            pass
 
     # ── Optimisers — separate Generator and Discriminator ─────────────────────
     opt_params  = config["optimizer_params"]
@@ -755,9 +759,11 @@ def run_stage2_training(config_path: str = CONFIG_PATH, sync_hf_first: bool = Tr
     latest_s2   = _find_latest_stage2_checkpoint()
     if latest_s2:
         print(f"  Resuming Stage 2 from: {latest_s2}")
-        print("\n  [*] Syncing resumed Stage 2 checkpoint to Hugging Face...", flush=True)
-        _upload_to_hf(latest_s2, os.path.basename(latest_s2))
-        _upload_to_hf(latest_s2, "kion_stage2_latest.pth")
+        # Only sync to HF if this checkpoint was loaded from Google Drive
+        if os.path.exists("/content/drive/MyDrive") and latest_s2.startswith("/content/drive"):
+            print("\n  [*] Syncing resumed Stage 2 checkpoint from Drive to Hugging Face...", flush=True)
+            _upload_to_hf(latest_s2, os.path.basename(latest_s2))
+            _upload_to_hf(latest_s2, "kion_stage2_latest.pth")
         ckpt = torch.load(latest_s2, map_location=device)
         for k in model:
             if "net" in ckpt and k in ckpt["net"]:
