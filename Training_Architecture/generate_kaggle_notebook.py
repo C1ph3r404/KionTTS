@@ -66,7 +66,7 @@ def build_notebook():
 This notebook runs the complete **KionTTS** training pipeline on **Kaggle with 2x Tesla T4 GPUs**:
 - **Hardware**: Kaggle T4x2 (2x 15GB VRAM GPUs, Accelerate DDP multi-GPU scaling)
 - **Checkpoints**: Synced automatically to & from **Hugging Face Model Hub** (Zero Google Drive dependency)
-- **Dataset**: Automatically extracts from uploaded `kion_dataset.tar` in Kaggle input
+- **Dataset**: Automatically discovers uploaded dataset in Kaggle input (supporting pre-extracted folders, batch zips, or archives)
 - **Stages**:
   - **Stage 1**: Acoustic Foundation (TextEncoder + Decoder + StyleEncoder)
   - **Stage 2**: Style Diffusion + KionStyleAdapter (Tag-conditioned expressive synthesis)
@@ -326,51 +326,29 @@ class HFCheckpointManager:
 hf_manager = HFCheckpointManager()""")
 
     # Cell 6: Dataset Extraction
-    add_md("""## 6. Dataset Extraction from `kion_dataset.tar` & Manifest Generation
-Automatically detects `kion_dataset.tar` attached as a Kaggle dataset under `/kaggle/input/`, extracts it to `/kaggle/working/data`, and runs the unpacker to create StyleTTS2 manifest lists.""")
+    add_md("""## 6. Dataset Preparation & Manifest Generation
+Automatically detects the dataset in `/kaggle/input/` (supports pre-extracted Kaggle datasets, nested batch zips, or tar archives), links WAVs, and runs the unpacker to create StyleTTS2 manifest lists.""")
 
     add_code("""import os
-import tarfile
-import glob
+import sys
 
-# Step 1: Detect and extract kion_dataset.tar
-DATA_DEST = "/kaggle/working/data"
-os.makedirs(DATA_DEST, exist_ok=True)
-
-tar_found = None
-for root, _, files in os.walk("/kaggle/input"):
-    for f in files:
-        if f.endswith(".tar"):
-            tar_found = os.path.join(root, f)
-            break
-    if tar_found:
-        break
-
-if tar_found:
-    print(f"[*] Found dataset archive: {tar_found}")
-    print(f"[*] Extracting tar archive to {DATA_DEST}...")
-    with tarfile.open(tar_found, "r") as tar:
-        tar.extractall(path=DATA_DEST)
-    print(f"[✓] Extracted tar archive to {DATA_DEST}")
-else:
-    print(f"[!] No .tar file found under /kaggle/input. Checking for direct .zip files...")
-
-# Step 2: Run Data Unpacker pipeline
+# Step 1: Detect dataset source under /kaggle/input (handles pre-extracted folders, batch zips, or archives)
 unpacker_mod = load_cell_script("03_data_unpacker_and_manifest.py")
 
-train_zip = unpacker_mod.find_dataset_zip("KionTTS_Dataset_train.zip")
-val_zip   = unpacker_mod.find_dataset_zip("KionTTS_Dataset_val.zip")
-print(f"Train zip: {train_zip}")
-print(f"Val zip  : {val_zip}")
+train_source = unpacker_mod.find_dataset_source("train")
+val_source   = unpacker_mod.find_dataset_source("val")
+print(f"Train source : {train_source}")
+print(f"Val source   : {val_source}")
 
+# Step 2: Run Extraction & Manifest Generation pipeline
 unpacker_mod.run_extraction_pipeline(
-    train_zip=train_zip,
-    val_zip=val_zip,
+    train_source=train_source,
+    val_source=val_source,
     wav_dir="/kaggle/working/dataset/wavs",
     manifest_dir="/kaggle/working/dataset",
     styletts2_data_dir=os.path.join(STYLETTS2_DIR, "Data")
 )
-print("[✓] Dataset unpacking & manifest generation complete!")""")
+print("[✓] Dataset preparation & manifest generation complete!")""")
 
     # Cell 7: Feature Precomputation
     add_md("""## 7. GPU-Accelerated Feature Precomputation
