@@ -283,6 +283,14 @@ def _download_from_hf(hf_filename: str, local_dest_dir: str = DRIVE_CKPT_DIR, re
             local_dir=local_dest_dir,
             local_dir_use_symlinks=False,
         )
+        if hf_filename.endswith(".txt"):
+            if os.path.exists(dest) and os.path.getsize(dest) > 0:
+                print(f"  [✓] Successfully downloaded pointer from HF: {dest}")
+                return dest
+            else:
+                print(f"  [!] Pointer file from HF is empty or missing: {dest}")
+                return None
+
         if _is_valid_checkpoint(dest):
             print(f"  [✓] Successfully downloaded & verified from HF: {dest}")
             return dest
@@ -952,7 +960,6 @@ def run_stage2_training(config_path: str = CONFIG_PATH, sync_hf_first: bool = Tr
         pbar = tqdm(
             train_dataloader,
             total=steps_per_epoch,
-            initial=steps_to_skip,
             desc=f"Epoch {epoch+1:03d}/{epochs} [Stage 2]",
             leave=False,
         )
@@ -960,6 +967,9 @@ def run_stage2_training(config_path: str = CONFIG_PATH, sync_hf_first: bool = Tr
         first_step_after_resume = (start_epoch * steps_per_epoch + steps_to_skip + 1)
         for i, batch in enumerate(pbar):
             if epoch == start_epoch and i < steps_to_skip:
+                if (i + 1) % 50 == 0 or (i + 1) == steps_to_skip:
+                    pct = ((i + 1) / steps_to_skip) * 100
+                    print(f"      [>] Fast-forwarding dataloader: {i+1}/{steps_to_skip} steps ({pct:.0f}%)...", flush=True)
                 continue
 
             waves = batch[0]
