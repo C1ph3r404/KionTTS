@@ -238,6 +238,37 @@ def _upload_to_hf(local_path: str, hf_filename: str, repo_id: str = HF_REPO_ID, 
         return False
 
 
+def _prune_hf_checkpoints(repo_id: str = HF_REPO_ID, token: str = None, keep_last_n: int = 3) -> None:
+    """Prunes older intermediate step checkpoints on Hugging Face, keeping only the latest N (e.g. 2-3)."""
+    token = token or _get_hf_token()
+    if not token:
+        return
+    try:
+        from huggingface_hub import HfApi
+        import re
+        api = HfApi(token=token)
+        files = api.list_repo_files(repo_id=repo_id, repo_type="model")
+
+        step_files = []
+        for f in files:
+            m = re.match(r"checkpoint-(\d+)\.pth$", f)
+            if m:
+                step_files.append((int(m.group(1)), f))
+
+        step_files.sort(key=lambda x: x[0])
+        if len(step_files) > keep_last_n:
+            to_delete = step_files[:-keep_last_n]
+            for step_num, fname in to_delete:
+                try:
+                    print(f"  [-] Pruning old checkpoint on Hugging Face: {fname} (Step {step_num})...", flush=True)
+                    api.delete_file(path_in_repo=fname, repo_id=repo_id, repo_type="model", commit_message=f"Prune old intermediate checkpoint {fname}")
+                    print(f"  [✓] Successfully pruned {fname} from Hugging Face.")
+                except Exception as e:
+                    print(f"  [!] Failed to prune {fname} on HF: {e}")
+    except Exception as e:
+        print(f"  [-] HF pruning check skipped: {e}")
+
+
 def _download_from_hf(hf_filename: str, local_dest_dir: str = DRIVE_CKPT_DIR, repo_id: str = HF_REPO_ID, token: str = None) -> str | None:
     """Downloads a checkpoint from Hugging Face Model Hub if not present locally."""
     token = token or _get_hf_token()
@@ -279,21 +310,46 @@ def _is_valid_checkpoint(path: str) -> bool:
         return False
 
 
-def _save_to_drive(state: dict, epoch: int, step: int = None, is_best: bool = False, stage: str = "stage2", step_interval: int = 900):
+def _prune_local_checkpoints(ckpt_dir: str = DRIVE_CKPT_DIR, keep_last_n: int = 3):
+    """Prunes old step checkpoints locally to avoid filling disk space (e.g. Kaggle 20GB limit)."""
+    import glob, re
+    patterns = [
+        os.path.join(ckpt_dir, "checkpoint-*.pth"),
+        os.path.join(ckpt_dir, "kion_stage2_step_*.pth"),
+    ]
+    checkpoints = []
+    for pat in patterns:
+        checkpoints.extend(glob.glob(pat))
+    checkpoints = [c for c in set(checkpoints) if not c.endswith("best.pth") and not c.endswith("final.pth") and not c.endswith("latest.pth")]
+
+    def _extract_step(p):
+        m = re.search(r"checkpoint-(\d+)\.pth", p)
+        if m: return int(m.group(1))
+        m2 = re.search(r"_step_(\d+)\.pth", p)
+        if m2: return int(m2.group(1))
+        return int(os.path.getmtime(p))
+
+    checkpoints.sort(key=_extract_step)
+    if len(checkpoints) > keep_last_n:
+        to_remove = checkpoints[:-keep_last_n]
+        for c in to_remove:
+            try:
+                os.remove(c)
+                print(f"  [-] Pruned older local checkpoint: {os.path.basename(c)}")
+            except OSError:
+                pass
+
+
+def _save_to_drive(state: dict, epoch: int, step: int = None, is_best: bool = False, stage: str = "stage2", step_interval: int = 900, keep_last_n: int = 3):
     os.makedirs(DRIVE_CKPT_DIR, exist_ok=True)
     if step is not None:
-        slot = "A" if (step // step_interval) % 2 == 0 else "B"
-        file_base = f"kion_{stage}_step_slot_{slot}.pth"
+        file_base = f"checkpoint-{step}.pth"
         ckpt_path = os.path.join(DRIVE_CKPT_DIR, file_base)
+        print(f"\n  [*] Saving step checkpoint {step} → {file_base}...", flush=True)
     else:
-        slot = "A" if epoch % 2 == 0 else "B"
-        file_base = f"kion_{stage}_epoch_slot_{slot}.pth"
+        file_base = f"checkpoint-epoch-{epoch}.pth"
         ckpt_path = os.path.join(DRIVE_CKPT_DIR, file_base)
-
-    if step is not None:
-        print(f"\n  [*] Saving step checkpoint {step} (Slot {slot})...", flush=True)
-    else:
-        print(f"\n  [*] Saving epoch checkpoint (Epoch {epoch}, Slot {slot})...", flush=True)
+        print(f"\n  [*] Saving epoch checkpoint (Epoch {epoch}) → {file_base}...", flush=True)
 
     local_dir = "/kaggle/working" if os.path.exists("/kaggle") else ("/content" if os.path.exists("/content") else os.path.dirname(ckpt_path))
     tmp_path = os.path.join(local_dir, f"kion_{stage}_tmp_{int(time.time())}.pth")
@@ -301,10 +357,7 @@ def _save_to_drive(state: dict, epoch: int, step: int = None, is_best: bool = Fa
         torch.save(state, tmp_path)
         if _is_valid_checkpoint(tmp_path):
             shutil.copyfile(tmp_path, ckpt_path)
-            if step is not None:
-                print(f"  [✓] Verified & saved step checkpoint {step} (Slot {slot}) → {ckpt_path}")
-            else:
-                print(f"  [✓] Verified & saved epoch checkpoint (Epoch {epoch}, Slot {slot}) → {ckpt_path}")
+            print(f"  [✓] Verified & saved checkpoint → {ckpt_path}")
 
             # Update local pointer file
             meta_path = os.path.join(DRIVE_CKPT_DIR, f"latest_{stage}_checkpoint.txt")
@@ -314,10 +367,24 @@ def _save_to_drive(state: dict, epoch: int, step: int = None, is_best: bool = Fa
             except Exception:
                 pass
 
-            # Sync to Hugging Face Hub
+            # Sync to Hugging Face Hub as checkpoint-<step_count>.pth
             _upload_to_hf(ckpt_path, file_base)
             if os.path.exists(meta_path):
                 _upload_to_hf(meta_path, f"latest_{stage}_checkpoint.txt")
+
+            # Also update kion_{stage}_latest.pth alias for compatibility
+            latest_alias = os.path.join(DRIVE_CKPT_DIR, f"kion_{stage}_latest.pth")
+            try:
+                shutil.copyfile(ckpt_path, latest_alias)
+                _upload_to_hf(latest_alias, f"kion_{stage}_latest.pth")
+            except Exception:
+                pass
+
+            # Prune older checkpoints locally so Kaggle disk doesn't fill up
+            _prune_local_checkpoints(DRIVE_CKPT_DIR, keep_last_n=keep_last_n)
+
+            # Prune older checkpoints on Hugging Face so remote storage doesn't accumulate (keeps last 2-3)
+            _prune_hf_checkpoints(repo_id=HF_REPO_ID, keep_last_n=keep_last_n)
         else:
             print(f"  [!] Local save integrity check failed. Skipping copy to checkpoint directory.")
     finally:
@@ -336,7 +403,7 @@ def _save_to_drive(state: dict, epoch: int, step: int = None, is_best: bool = Fa
 
 
 def _find_latest_stage2_checkpoint() -> str | None:
-    import glob
+    import glob, re
     candidates = []
 
     # 1. Check pointer file
@@ -353,8 +420,10 @@ def _find_latest_stage2_checkpoint() -> str | None:
         except Exception:
             pass
 
-    # 2. Check rolling slots and numbered files
+    # 2. Check numbered checkpoints and rolling slots
     patterns = [
+        "checkpoint-*.pth",
+        "checkpoint_step_*.pt",
         "kion_stage2_step_slot_*.pth",
         "kion_stage2_epoch_slot_*.pth",
         "kion_stage2_step_*.pth",
@@ -364,8 +433,16 @@ def _find_latest_stage2_checkpoint() -> str | None:
     for pat in patterns:
         found.extend(glob.glob(os.path.join(DRIVE_CKPT_DIR, pat)))
 
-    valid_found = [c for c in found if not c.endswith("best.pth") and not c.endswith("final.pth")]
-    valid_found.sort(key=os.path.getmtime, reverse=True)
+    valid_found = [c for c in set(found) if not c.endswith("best.pth") and not c.endswith("final.pth") and not c.endswith("latest.pth")]
+
+    def _extract_step(p):
+        m = re.search(r"checkpoint-(\d+)\.pth", p)
+        if m: return int(m.group(1))
+        m2 = re.search(r"_step_(\d+)\.pth", p)
+        if m2: return int(m2.group(1))
+        return int(os.path.getmtime(p))
+
+    valid_found.sort(key=_extract_step, reverse=True)
     for c in valid_found:
         if c not in candidates:
             candidates.append(c)
@@ -385,15 +462,46 @@ def _find_latest_stage2_checkpoint() -> str | None:
 
     # 4. If no local candidates found (e.g. Kaggle environment), try Hugging Face Hub
     print("  [*] No local Stage 2 checkpoint found. Checking Hugging Face Hub...")
-    hf_best = _download_from_hf("kion_stage2_best.pth")
-    if hf_best:
-        return hf_best
-    hf_slot_a = _download_from_hf("kion_stage2_step_slot_A.pth")
-    if hf_slot_a:
-        return hf_slot_a
-    hf_slot_b = _download_from_hf("kion_stage2_step_slot_B.pth")
-    if hf_slot_b:
-        return hf_slot_b
+
+    # 4a. Check pointer file on HF
+    hf_ptr = _download_from_hf("latest_stage2_checkpoint.txt")
+    if hf_ptr and os.path.exists(hf_ptr):
+        try:
+            with open(hf_ptr, "r") as f:
+                target_file = f.readline().strip()
+            if target_file:
+                print(f"  [*] HF pointer points to '{target_file}'. Downloading...")
+                hf_ckpt = _download_from_hf(target_file)
+                if hf_ckpt and _is_valid_checkpoint(hf_ckpt):
+                    return hf_ckpt
+        except Exception as e:
+            print(f"  [!] Failed reading HF pointer file: {e}")
+
+    # 4b. Query HF repo files for checkpoint-<step>.pth (highest step first)
+    try:
+        from huggingface_hub import HfApi
+        token = _get_hf_token()
+        api = HfApi(token=token or None)
+        files = api.list_repo_files(repo_id=HF_REPO_ID, repo_type="model")
+        step_files = []
+        for f in files:
+            m = re.match(r"checkpoint-(\d+)\.pth", f)
+            if m:
+                step_files.append((int(m.group(1)), f))
+        if step_files:
+            step_files.sort(key=lambda x: x[0], reverse=True)
+            for _, sf in step_files:
+                hf_ckpt = _download_from_hf(sf)
+                if hf_ckpt and _is_valid_checkpoint(hf_ckpt):
+                    return hf_ckpt
+    except Exception as e:
+        print(f"  [-] Could not query HF repo file list: {e}")
+
+    # 4c. Fallback to legacy slot names or latest/best
+    for legacy_name in ["kion_stage2_step_slot_A.pth", "kion_stage2_step_slot_B.pth", "kion_stage2_latest.pth", "kion_stage2_best.pth"]:
+        hf_ckpt = _download_from_hf(legacy_name)
+        if hf_ckpt and _is_valid_checkpoint(hf_ckpt):
+            return hf_ckpt
 
     return None
 
@@ -1219,7 +1327,7 @@ def run_stage2_training(config_path: str = CONFIG_PATH, sync_hf_first: bool = Tr
             "val_loss":    val_loss,
             "epoch":       epoch,
         }
-        _save_to_drive(state, epoch + 1, is_best=is_best, stage="stage2")
+        _save_to_drive(state, epoch + 1, step=iters, is_best=is_best, stage="stage2")
 
     # ── Final save ────────────────────────────────────────────────────────────
     print("\n[+] Stage 2 training complete!")

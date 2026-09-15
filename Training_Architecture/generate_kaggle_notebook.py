@@ -323,6 +323,71 @@ class HFCheckpointManager:
             print(f"[-] Checkpoint '{hf_filename}' not available on HF Hub ({e}).")
             return None
 
+    def find_latest_checkpoint(self, stage: str = "stage2") -> str | None:
+        \"\"\"Finds and downloads the latest checkpoint from HF (checking latest pointer or checkpoint-<step>.pth).\"\"\"
+        import re
+        ptr_file = f"latest_{stage}_checkpoint.txt"
+        ptr_path = self.download_checkpoint(ptr_file)
+        if ptr_path and os.path.exists(ptr_path):
+            try:
+                with open(ptr_path, "r") as f:
+                    target = f.readline().strip()
+                if target:
+                    print(f"[*] Pointer points to '{target}'. Downloading...")
+                    ckpt = self.download_checkpoint(target)
+                    if ckpt and os.path.exists(ckpt):
+                        return ckpt
+            except Exception as e:
+                print(f"[!] Error reading pointer: {e}")
+
+        # Scan repository for checkpoint-<step>.pth
+        if self.api:
+            try:
+                files = self.api.list_repo_files(repo_id=self.repo_id, repo_type="model")
+                step_files = []
+                for f in files:
+                    m = re.match(r"checkpoint-(\\d+)\\.pth", f)
+                    if m:
+                        step_files.append((int(m.group(1)), f))
+                if step_files:
+                    step_files.sort(key=lambda x: x[0], reverse=True)
+                    return self.download_checkpoint(step_files[0][1])
+            except Exception as e:
+                print(f"[-] Could not list repo files: {e}")
+
+        # Fallback to standard names
+        for fallback in [f"kion_{stage}_latest.pth", f"kion_{stage}_step_slot_A.pth", f"kion_{stage}_step_slot_B.pth", f"kion_{stage}_best.pth"]:
+            ckpt = self.download_checkpoint(fallback)
+            if ckpt and os.path.exists(ckpt):
+                return ckpt
+
+        return None
+
+    def prune_hf_checkpoints(self, keep_last_n: int = 3) -> None:
+        \"\"\"Prunes older step checkpoints on Hugging Face, keeping only the latest N (e.g. 2-3).\"\"\"
+        if not self.api:
+            return
+        import re
+        try:
+            files = self.api.list_repo_files(repo_id=self.repo_id, repo_type="model")
+            step_files = []
+            for f in files:
+                m = re.match(r"checkpoint-(\\d+)\\.pth$", f)
+                if m:
+                    step_files.append((int(m.group(1)), f))
+            step_files.sort(key=lambda x: x[0])
+            if len(step_files) > keep_last_n:
+                to_delete = step_files[:-keep_last_n]
+                for step_num, fname in to_delete:
+                    try:
+                        print(f"[-] Pruning old checkpoint on Hugging Face: {fname} (Step {step_num})...")
+                        self.api.delete_file(path_in_repo=fname, repo_id=self.repo_id, repo_type="model", commit_message=f"Prune old intermediate checkpoint {fname}")
+                        print(f"[✓] Successfully pruned {fname} from Hugging Face.")
+                    except Exception as e:
+                        print(f"[!] Failed to prune {fname} on HF: {e}")
+        except Exception as e:
+            print(f"[-] HF pruning check skipped: {e}")
+
 hf_manager = HFCheckpointManager()""")
 
     # Cell 6: Dataset Extraction
@@ -417,7 +482,7 @@ else:
     add_md("""## 10. Stage 2 Training: Style Diffusion & KionStyleAdapter
 Trains the `KionStyleAdapter`, `DiffusionSampler`, and `ProsodyPredictor`.
 - Automatically pulls the Stage 1 checkpoint (`kion_stage1_best.pth`) uploaded from Colab!
-- Periodically saves step & epoch checkpoints to `/kaggle/working/checkpoints` and syncs them to Hugging Face Model Hub.""")
+- Periodically saves step checkpoints as `checkpoint-<step_count>.pth` (and updates `latest_stage2_checkpoint.txt` and `kion_stage2_latest.pth`) and syncs them directly to Hugging Face Model Hub so step progress is always clear!""")
 
     add_code("""import os
 import sys

@@ -76,16 +76,23 @@ class DriveCheckpointManager:
         if os.path.exists(self.latest_symlink):
             return self.latest_symlink
 
-        # Search for numbered checkpoints
-        pattern = os.path.join(self.checkpoint_dir, "checkpoint_step_*.pt")
-        checkpoints = glob.glob(pattern)
+        # Search for numbered checkpoints (new checkpoint-<step>.pth and legacy checkpoint_step_*.pt)
+        patterns = [
+            os.path.join(self.checkpoint_dir, "checkpoint-*.pth"),
+            os.path.join(self.checkpoint_dir, "checkpoint_step_*.pt"),
+        ]
+        checkpoints = []
+        for p in patterns:
+            checkpoints.extend(glob.glob(p))
         if not checkpoints:
             return None
 
         # Sort by step number extracted from filename
         def _get_step(path):
-            match = re.search(r"checkpoint_step_(\d+)\.pt", path)
-            return int(match.group(1)) if match else -1
+            match = re.search(r"checkpoint-(\d+)\.pth", path)
+            if match: return int(match.group(1))
+            match_legacy = re.search(r"checkpoint_step_(\d+)\.pt", path)
+            return int(match_legacy.group(1)) if match_legacy else -1
 
         checkpoints.sort(key=_get_step)
         return checkpoints[-1]
@@ -99,9 +106,9 @@ class DriveCheckpointManager:
         is_best: bool = False,
     ) -> str:
         """
-        Saves checkpoint state atomically to Drive.
+        Saves checkpoint state atomically to Drive as checkpoint-<step>.pth.
         """
-        checkpoint_filename = f"checkpoint_step_{step:07d}.pt"
+        checkpoint_filename = f"checkpoint-{step}.pth"
         target_path = os.path.join(self.checkpoint_dir, checkpoint_filename)
         temp_path = os.path.join(self.checkpoint_dir, f".tmp_{checkpoint_filename}")
 
@@ -152,12 +159,19 @@ class DriveCheckpointManager:
 
     def _prune_old_checkpoints(self):
         """Keep only the latest N numbered checkpoints to preserve Google Drive storage."""
-        pattern = os.path.join(self.checkpoint_dir, "checkpoint_step_*.pt")
-        checkpoints = glob.glob(pattern)
+        patterns = [
+            os.path.join(self.checkpoint_dir, "checkpoint-*.pth"),
+            os.path.join(self.checkpoint_dir, "checkpoint_step_*.pt"),
+        ]
+        checkpoints = []
+        for p in patterns:
+            checkpoints.extend(glob.glob(p))
 
         def _get_step(path):
-            match = re.search(r"checkpoint_step_(\d+)\.pt", path)
-            return int(match.group(1)) if match else -1
+            match = re.search(r"checkpoint-(\d+)\.pth", path)
+            if match: return int(match.group(1))
+            match_legacy = re.search(r"checkpoint_step_(\d+)\.pt", path)
+            return int(match_legacy.group(1)) if match_legacy else -1
 
         checkpoints.sort(key=_get_step)
         if len(checkpoints) > self.keep_last_n:

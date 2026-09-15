@@ -164,16 +164,46 @@ def _is_valid_checkpoint(path: str) -> bool:
         return False
 
 
-def _save_to_drive(state: dict, epoch: int, step: int = None, is_best: bool = False, step_interval: int = 900):
+def _prune_local_checkpoints(ckpt_dir: str = DRIVE_CKPT_DIR, keep_last_n: int = 3):
+    """Prunes old step checkpoints locally to avoid filling disk space."""
+    import glob, re
+    patterns = [
+        os.path.join(ckpt_dir, "checkpoint-*.pth"),
+        os.path.join(ckpt_dir, "kion_stage1_step_*.pth"),
+    ]
+    checkpoints = []
+    for pat in patterns:
+        checkpoints.extend(glob.glob(pat))
+    checkpoints = [c for c in set(checkpoints) if not c.endswith("best.pth") and not c.endswith("final.pth") and not c.endswith("latest.pth")]
+
+    def _extract_step(p):
+        m = re.search(r"checkpoint-(\d+)\.pth", p)
+        if m: return int(m.group(1))
+        m2 = re.search(r"_step_(\d+)\.pth", p)
+        if m2: return int(m2.group(1))
+        return int(os.path.getmtime(p))
+
+    checkpoints.sort(key=_extract_step)
+    if len(checkpoints) > keep_last_n:
+        to_remove = checkpoints[:-keep_last_n]
+        for c in to_remove:
+            try:
+                os.remove(c)
+                print(f"  [-] Pruned older local checkpoint: {os.path.basename(c)}")
+            except OSError:
+                pass
+
+
+def _save_to_drive(state: dict, epoch: int, step: int = None, is_best: bool = False, step_interval: int = 900, keep_last_n: int = 3):
     os.makedirs(DRIVE_CKPT_DIR, exist_ok=True)
     if step is not None:
-        # Fixed rolling slots A & B (overwritten in-place, zero files deleted into Drive Trash!)
-        slot = "A" if (step // step_interval) % 2 == 0 else "B"
-        ckpt_path = os.path.join(DRIVE_CKPT_DIR, f"kion_stage1_step_slot_{slot}.pth")
+        file_base = f"checkpoint-{step}.pth"
+        ckpt_path = os.path.join(DRIVE_CKPT_DIR, file_base)
+        print(f"\n  [*] Saving step checkpoint {step} → {file_base}...", flush=True)
     else:
-        # Fixed rolling slots A & B for epochs (overwritten in-place)
-        slot = "A" if epoch % 2 == 0 else "B"
-        ckpt_path = os.path.join(DRIVE_CKPT_DIR, f"kion_stage1_epoch_slot_{slot}.pth")
+        file_base = f"checkpoint-epoch-{epoch}.pth"
+        ckpt_path = os.path.join(DRIVE_CKPT_DIR, file_base)
+        print(f"\n  [*] Saving epoch checkpoint (Epoch {epoch}) → {file_base}...", flush=True)
 
     # Safe write: save to local /tmp first, verify integrity, then copy to Drive
     tmp_path = f"/tmp/kion_stage1_tmp_{int(time.time())}.pth"
@@ -181,19 +211,19 @@ def _save_to_drive(state: dict, epoch: int, step: int = None, is_best: bool = Fa
         torch.save(state, tmp_path)
         if _is_valid_checkpoint(tmp_path):
             shutil.copyfile(tmp_path, ckpt_path)
-            if step is not None:
-                print(f"\n  [✓] Verified & saved step checkpoint {step} (Slot {slot}) → {ckpt_path}")
-            else:
-                print(f"\n  [✓] Verified & saved epoch checkpoint (Epoch {epoch}, Slot {slot}) → {ckpt_path}")
+            print(f"  [✓] Verified & saved checkpoint → {ckpt_path}")
             # Update pointer file only on successful verified save
             meta_path = os.path.join(DRIVE_CKPT_DIR, "latest_stage1_checkpoint.txt")
             try:
                 with open(meta_path, "w") as f:
-                    f.write(f"{ckpt_path}\n")
+                    f.write(f"{file_base}\n")
             except Exception:
                 pass
+
+            # Prune older checkpoints locally so disk doesn't fill up
+            _prune_local_checkpoints(DRIVE_CKPT_DIR, keep_last_n=keep_last_n)
         else:
-            print(f"  [!] Local save integrity check failed. Skipping copy to Drive.")
+            print(f"  [!] Local save integrity check failed. Skipping copy to checkpoint directory.")
     finally:
         if os.path.exists(tmp_path):
             try:
@@ -208,7 +238,7 @@ def _save_to_drive(state: dict, epoch: int, step: int = None, is_best: bool = Fa
 
 
 def _find_latest_drive_checkpoint() -> str | None:
-    import glob
+    import glob, re
     candidates = []
 
     # 1. Check pointer file
@@ -217,13 +247,18 @@ def _find_latest_drive_checkpoint() -> str | None:
         try:
             with open(meta_path, "r") as f:
                 target = f.readline().strip()
-                if target and os.path.exists(target):
-                    candidates.append(target)
+                if target:
+                    if not os.path.isabs(target):
+                        target = os.path.join(DRIVE_CKPT_DIR, target)
+                    if os.path.exists(target):
+                        candidates.append(target)
         except Exception:
             pass
 
-    # 2. Check rolling slots and legacy numbered files (sorted newest first)
+    # 2. Check numbered checkpoints and legacy rolling slots
     patterns = [
+        "checkpoint-*.pth",
+        "checkpoint_step_*.pt",
         "kion_stage1_step_slot_*.pth",
         "kion_stage1_epoch_slot_*.pth",
         "kion_stage1_step_*.pth",
@@ -233,8 +268,16 @@ def _find_latest_drive_checkpoint() -> str | None:
     for pat in patterns:
         found.extend(glob.glob(os.path.join(DRIVE_CKPT_DIR, pat)))
 
-    valid_found = [c for c in found if not c.endswith("best.pth") and not c.endswith("final.pth")]
-    valid_found.sort(key=os.path.getmtime, reverse=True)
+    valid_found = [c for c in set(found) if not c.endswith("best.pth") and not c.endswith("final.pth")]
+
+    def _extract_step(p):
+        m = re.search(r"checkpoint-(\d+)\.pth", p)
+        if m: return int(m.group(1))
+        m2 = re.search(r"_step_(\d+)\.pth", p)
+        if m2: return int(m2.group(1))
+        return int(os.path.getmtime(p))
+
+    valid_found.sort(key=_extract_step, reverse=True)
     for c in valid_found:
         if c not in candidates:
             candidates.append(c)
@@ -250,7 +293,7 @@ def _find_latest_drive_checkpoint() -> str | None:
             print(f"  [✓] Integrity confirmed: {os.path.basename(cand)}")
             return cand
         else:
-            print(f"  [!] Checkpoint {os.path.basename(cand)} is damaged. Falling back to previous slot...")
+            print(f"  [!] Checkpoint {os.path.basename(cand)} is damaged. Falling back...")
 
     return None
 
@@ -823,7 +866,7 @@ def run_stage1_training(config_path: str = CONFIG_PATH):
                     "val_loss":  val_loss,
                     "epoch":     epoch + 1,  # Completed epoch: resume starts from next epoch
                 }
-                _save_to_drive(state, epoch + 1, is_best=is_best)
+                _save_to_drive(state, epoch + 1, step=iters, is_best=is_best)
 
     # Final save
     if accelerator.is_main_process:
