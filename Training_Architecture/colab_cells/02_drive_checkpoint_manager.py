@@ -37,6 +37,17 @@ def _get_hf_token() -> str:
     return ""
 
 
+_TOKEN_VAL = _get_hf_token()
+if _TOKEN_VAL:
+    os.environ["HF_TOKEN"] = _TOKEN_VAL
+    os.environ["HUGGING_FACE_HUB_TOKEN"] = _TOKEN_VAL
+    try:
+        from huggingface_hub import login
+        login(token=_TOKEN_VAL, add_to_git_credential=False)
+    except Exception:
+        pass
+
+
 class DriveCheckpointManager:
     """
     Manages saving and loading model checkpoints to/from local disk, Google Drive,

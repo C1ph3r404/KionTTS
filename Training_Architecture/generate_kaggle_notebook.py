@@ -264,10 +264,22 @@ def get_hf_token():
     if t: return t.strip()
     # 3. Interactive prompt
     print("[*] HF_TOKEN secret not found in Kaggle Secrets.")
-    t = getpass.getpass("Enter your Hugging Face Write Token: ").strip()
-    return t
+    try:
+        t = getpass.getpass("Enter your Hugging Face Write Token: ").strip()
+        return t
+    except Exception:
+        return ""
 
 HF_TOKEN = get_hf_token()
+if HF_TOKEN:
+    os.environ["HF_TOKEN"] = HF_TOKEN
+    os.environ["HUGGING_FACE_HUB_TOKEN"] = HF_TOKEN
+    try:
+        from huggingface_hub import login
+        login(token=HF_TOKEN, add_to_git_credential=False)
+        print("[✓] Authenticated with Hugging Face Hub.")
+    except Exception as e:
+        print(f"[!] HF login notice: {e}")
 HF_REPO_ID = os.environ.get("HF_REPO_ID", "nate0001/KionTTS-Checkpoints").strip()
 
 class HFCheckpointManager:
@@ -452,7 +464,7 @@ print(f"[✓] KionTTS Config successfully generated at: {config_path}")""")
     # Cell 9: Stage 1 Training
     add_md("""## 9. Stage 1 Training: Acoustic Foundation (Accelerate Multi-GPU)
 Trains TextEncoder + Decoder (iSTFTNet) + StyleEncoder.
-- **Auto-check**: If `kion_stage1_best.pth` is found on Hugging Face (uploaded from Colab), Stage 1 training is **automatically skipped**!
+- **Auto-check**: If a Stage 2 checkpoint or `kion_stage1_best.pth` is found on Hugging Face, Stage 1 training is **automatically skipped**!
 - If no checkpoint exists, runs distributed training across **both Tesla T4 GPUs** via Hugging Face `accelerate`.""")
 
     add_code("""import os
@@ -462,27 +474,35 @@ print("=" * 60)
 print("Stage 1 Acoustic Foundation Check & Training...")
 print("=" * 60)
 
-# 1. Check if Stage 1 is already completed on Hugging Face or locally
-stage1_ckpt = hf_manager.download_checkpoint("kion_stage1_best.pth")
-if not stage1_ckpt:
-    stage1_ckpt = hf_manager.download_checkpoint("kion_stage1_final.pth")
-
-if stage1_ckpt and os.path.exists(stage1_ckpt) and os.path.getsize(stage1_ckpt) > 1024 * 1024:
-    print(f"\\n[✓] STAGE 1 IS ALREADY COMPLETED!")
-    print(f"    Found verified Stage 1 checkpoint: {stage1_ckpt} ({os.path.getsize(stage1_ckpt)/(1024*1024):.1f} MB)")
-    print("    Skipping Stage 1 training automatically. Proceed directly to Cell 10 for Stage 2!")
+# 1. Check if Stage 2 is already underway/completed (Stage 1 is completed!)
+stage2_ckpt = hf_manager.find_latest_checkpoint(stage="stage2")
+if stage2_ckpt and os.path.exists(stage2_ckpt) and os.path.getsize(stage2_ckpt) > 1024 * 1024:
+    print(f"\\n[✓] STAGE 2 CHECKPOINT DETECTED: {os.path.basename(stage2_ckpt)} ({os.path.getsize(stage2_ckpt)/(1024*1024):.1f} MB)!")
+    print("    Stage 1 Acoustic Foundation was already completed in prior runs.")
+    print("    Skipping Stage 1 training automatically. Proceed directly to Cell 10 to continue Stage 2 training!")
 else:
-    print("\\n[*] No Stage 1 checkpoint found. Starting dual-GPU Stage 1 training on T4x2...")
-    cmd_stage1 = f\"\"\"accelerate launch --multi_gpu --num_processes 2 \\
+    # 2. Check if Stage 1 checkpoint is already completed on Hugging Face or locally
+    stage1_ckpt = hf_manager.download_checkpoint("kion_stage1_best.pth")
+    if not stage1_ckpt:
+        stage1_ckpt = hf_manager.download_checkpoint("kion_stage1_final.pth")
+
+    if stage1_ckpt and os.path.exists(stage1_ckpt) and os.path.getsize(stage1_ckpt) > 1024 * 1024:
+        print(f"\\n[✓] STAGE 1 IS ALREADY COMPLETED!")
+        print(f"    Found verified Stage 1 checkpoint: {stage1_ckpt} ({os.path.getsize(stage1_ckpt)/(1024*1024):.1f} MB)")
+        print("    Skipping Stage 1 training automatically. Proceed directly to Cell 10 for Stage 2!")
+    else:
+        print("\\n[*] No Stage 1 or Stage 2 checkpoint found. Starting dual-GPU Stage 1 training on T4x2...")
+        cmd_stage1 = f\"\"\"accelerate launch --multi_gpu --num_processes 2 \\
   {REPO_DIR}/Training_Architecture/colab_cells/06_stage1_acoustic_training.py
 \"\"\"
-    subprocess.run(cmd_stage1, shell=True, check=False)""")
+        subprocess.run(cmd_stage1, shell=True, check=False)""")
 
     # Cell 10: Stage 2 Training
     add_md("""## 10. Stage 2 Training: Style Diffusion & KionStyleAdapter
 Trains the `KionStyleAdapter`, `DiffusionSampler`, and `ProsodyPredictor`.
-- Automatically pulls the Stage 1 checkpoint (`kion_stage1_best.pth`) uploaded from Colab!
-- Periodically saves step checkpoints as `checkpoint-<step_count>.pth` (and updates `latest_stage2_checkpoint.txt` and `kion_stage2_latest.pth`) and syncs them directly to Hugging Face Model Hub so step progress is always clear!""")
+- Automatically checks for existing Stage 2 checkpoints (`checkpoint-<step>.pth`, `kion_stage2_latest.pth`, `kion_stage2_best.pth`) to resume seamlessly!
+- If starting fresh, pulls the Stage 1 checkpoint (`kion_stage1_best.pth`).
+- Periodically saves step checkpoints as `checkpoint-<step_count>.pth` and syncs them directly to Hugging Face Model Hub so step progress is always clear!""")
 
     add_code("""import os
 import sys
@@ -492,24 +512,30 @@ print("=" * 60)
 print("Stage 2 Style Diffusion & KionStyleAdapter Training...")
 print("=" * 60)
 
-# Verify Stage 1 checkpoint is present before training
-s1_local = "/kaggle/working/checkpoints/kion_stage1_best.pth"
-if not os.path.exists(s1_local):
-    print("[*] Pulling Stage 1 checkpoint from Hugging Face...")
-    s1_local = hf_manager.download_checkpoint("kion_stage1_best.pth")
-    if not s1_local:
-        s1_local = hf_manager.download_checkpoint("kion_stage1_final.pth")
+# Check if an existing Stage 2 checkpoint is present or available on HF
+stage2_ckpt = hf_manager.find_latest_checkpoint(stage="stage2")
+if stage2_ckpt and os.path.exists(stage2_ckpt):
+    print(f"[✓] Found existing Stage 2 checkpoint: {stage2_ckpt} ({os.path.getsize(stage2_ckpt)/(1024*1024):.1f} MB)")
+    print("    Stage 2 will resume directly from this checkpoint (Stage 1 acoustic weights are already embedded)!")
+else:
+    # Verify Stage 1 checkpoint is present before training from scratch
+    s1_local = "/kaggle/working/checkpoints/kion_stage1_best.pth"
+    if not os.path.exists(s1_local):
+        print("[*] No Stage 2 checkpoint found. Pulling Stage 1 checkpoint from Hugging Face...")
+        s1_local = hf_manager.download_checkpoint("kion_stage1_best.pth")
+        if not s1_local:
+            s1_local = hf_manager.download_checkpoint("kion_stage1_final.pth")
 
-if not s1_local or not os.path.exists(s1_local):
-    raise FileNotFoundError(
-        "Stage 1 checkpoint was NOT found on disk or Hugging Face! "
-        "Make sure you uploaded it from Colab (Cell 07 --upload-only) or ran Cell 9."
-    )
+    if not s1_local or not os.path.exists(s1_local):
+        raise FileNotFoundError(
+            "Neither Stage 2 checkpoint nor Stage 1 checkpoint was found on disk or Hugging Face! "
+            "Cannot start Stage 2 training without initial weights."
+        )
+    print(f"[✓] Stage 1 checkpoint verified: {s1_local} ({os.path.getsize(s1_local)/(1024*1024):.1f} MB)")
 
-print(f"[✓] Stage 1 checkpoint verified: {s1_local} ({os.path.getsize(s1_local)/(1024*1024):.1f} MB)")
 print("[*] Launching Stage 2 training...")
 
-# Run Stage 2 training script (which auto-syncs checkpoints to HF)
+# Run Stage 2 training script (which auto-resumes and auto-syncs checkpoints to HF)
 cmd_stage2 = f"{sys.executable} {REPO_DIR}/Training_Architecture/colab_cells/07_stage2_style_diffusion.py"
 subprocess.run(cmd_stage2, shell=True, check=False)""")
 

@@ -205,6 +205,14 @@ def _get_hf_token() -> str:
 
 
 HF_TOKEN = _get_hf_token()
+if HF_TOKEN:
+    os.environ["HF_TOKEN"] = HF_TOKEN
+    os.environ["HUGGING_FACE_HUB_TOKEN"] = HF_TOKEN
+    try:
+        from huggingface_hub import login
+        login(token=HF_TOKEN, add_to_git_credential=False)
+    except Exception:
+        pass
 HF_REPO_ID = os.environ.get("HF_REPO_ID", "nate0001/KionTTS-Checkpoints").strip()
 
 
@@ -812,27 +820,49 @@ def run_stage2_training(config_path: str = CONFIG_PATH, sync_hf_first: bool = Tr
         clamp=False,
     )
 
-    # ── Load Stage 1 checkpoint ───────────────────────────────────────────────
-    stage1_ckpt = _load_stage1_checkpoint()
-    print(f"  Loading Stage 1 checkpoint: {stage1_ckpt}")
-    model, _, _, _ = load_checkpoint(
-        model, None, stage1_ckpt, load_only_params=True,
-        ignore_modules=['bert', 'bert_encoder', 'predictor', 'predictor_encoder', 'msd', 'mpd', 'wd', 'diffusion']
-    )
-    # Stage 2 predictor_encoder is initialised from Stage 1 style_encoder weights
-    model["predictor_encoder"] = copy.deepcopy(model["style_encoder"])
+    # ── Check for existing Stage 2 checkpoint first ───────────────────────────
+    start_epoch = 0
+    iters       = 0
+    best_loss   = float("inf")
+    latest_s2   = _find_latest_stage2_checkpoint()
 
-    # ── Hugging Face Sync for Stage 1 Checkpoint (ONLY if loaded from Google Drive) ────
-    if os.path.exists("/content/drive/MyDrive") and stage1_ckpt.startswith("/content/drive"):
-        print("\n  [*] Syncing verified Stage 1 checkpoint from Drive to Hugging Face Model Hub...", flush=True)
-        _upload_to_hf(stage1_ckpt, "kion_stage1_best.pth")
-        tmp_s1_ptr = os.path.join(os.path.dirname(stage1_ckpt), "latest_stage1_checkpoint.txt")
-        try:
-            with open(tmp_s1_ptr, "w") as f:
-                f.write("kion_stage1_best.pth\n")
-            _upload_to_hf(tmp_s1_ptr, "latest_stage1_checkpoint.txt")
-        except Exception:
-            pass
+    if latest_s2:
+        print(f"\n  [✓] Resuming Stage 2 from existing checkpoint: {latest_s2}")
+        print("      (Stage 1 acoustic weights are already embedded in this Stage 2 checkpoint)")
+        # Only sync to HF if this checkpoint was loaded from Google Drive
+        if os.path.exists("/content/drive/MyDrive") and latest_s2.startswith("/content/drive"):
+            print("\n  [*] Syncing resumed Stage 2 checkpoint from Drive to Hugging Face...", flush=True)
+            _upload_to_hf(latest_s2, os.path.basename(latest_s2))
+            _upload_to_hf(latest_s2, "kion_stage2_latest.pth")
+        ckpt = torch.load(latest_s2, map_location=device)
+        for k in model:
+            if "net" in ckpt and k in ckpt["net"]:
+                model[k].load_state_dict(ckpt["net"][k])
+        if "predictor_encoder" not in ckpt.get("net", {}):
+            model["predictor_encoder"] = copy.deepcopy(model["style_encoder"])
+    else:
+        # ── Fresh start: Load Stage 1 checkpoint ─────────────────────────────
+        print("\n  [*] No existing Stage 2 checkpoint found. Initializing from Stage 1 checkpoint...")
+        stage1_ckpt = _load_stage1_checkpoint()
+        print(f"  Loading Stage 1 checkpoint: {stage1_ckpt}")
+        model, _, _, _ = load_checkpoint(
+            model, None, stage1_ckpt, load_only_params=True,
+            ignore_modules=['bert', 'bert_encoder', 'predictor', 'predictor_encoder', 'msd', 'mpd', 'wd', 'diffusion']
+        )
+        # Stage 2 predictor_encoder is initialised from Stage 1 style_encoder weights
+        model["predictor_encoder"] = copy.deepcopy(model["style_encoder"])
+
+        # ── Hugging Face Sync for Stage 1 Checkpoint (ONLY if loaded from Google Drive) ────
+        if os.path.exists("/content/drive/MyDrive") and stage1_ckpt.startswith("/content/drive"):
+            print("\n  [*] Syncing verified Stage 1 checkpoint from Drive to Hugging Face Model Hub...", flush=True)
+            _upload_to_hf(stage1_ckpt, "kion_stage1_best.pth")
+            tmp_s1_ptr = os.path.join(os.path.dirname(stage1_ckpt), "latest_stage1_checkpoint.txt")
+            try:
+                with open(tmp_s1_ptr, "w") as f:
+                    f.write("kion_stage1_best.pth\n")
+                _upload_to_hf(tmp_s1_ptr, "latest_stage1_checkpoint.txt")
+            except Exception:
+                pass
 
     # ── Optimisers — separate Generator and Discriminator ─────────────────────
     opt_params  = config["optimizer_params"]
@@ -868,22 +898,8 @@ def run_stage2_training(config_path: str = CONFIG_PATH, sync_hf_first: bool = Tr
     # Note: Full adversarial SLM rollouts are replaced by direct WavLMLoss (wl)
     # in the training loop below to preserve VRAM on 16GB GPUs like Colab T4.
 
-    # ── Resume Stage 2 if available ───────────────────────────────────────────
-    start_epoch = 0
-    iters       = 0
-    best_loss   = float("inf")
-    latest_s2   = _find_latest_stage2_checkpoint()
+    # ── Restore optimizer & iteration state if resumed ────────────────────────
     if latest_s2:
-        print(f"  Resuming Stage 2 from: {latest_s2}")
-        # Only sync to HF if this checkpoint was loaded from Google Drive
-        if os.path.exists("/content/drive/MyDrive") and latest_s2.startswith("/content/drive"):
-            print("\n  [*] Syncing resumed Stage 2 checkpoint from Drive to Hugging Face...", flush=True)
-            _upload_to_hf(latest_s2, os.path.basename(latest_s2))
-            _upload_to_hf(latest_s2, "kion_stage2_latest.pth")
-        ckpt = torch.load(latest_s2, map_location=device)
-        for k in model:
-            if "net" in ckpt and k in ckpt["net"]:
-                model[k].load_state_dict(ckpt["net"][k])
         if "optimizer_g" in ckpt:
             optimizer_g.load_state_dict(ckpt["optimizer_g"])
         if "optimizer_d" in ckpt:
