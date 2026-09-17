@@ -279,6 +279,10 @@ def _prune_hf_checkpoints(repo_id: str = HF_REPO_ID, token: str = None, keep_las
 
 def _download_from_hf(hf_filename: str, local_dest_dir: str = DRIVE_CKPT_DIR, repo_id: str = HF_REPO_ID, token: str = None) -> str | None:
     """Downloads a checkpoint from Hugging Face Model Hub if not present locally."""
+    local_file = os.path.join(local_dest_dir, hf_filename)
+    if not hf_filename.endswith(".txt") and os.path.exists(local_file) and _is_valid_checkpoint(local_file):
+        print(f"  [✓] Checkpoint '{hf_filename}' already present locally ({os.path.getsize(local_file)/(1024*1024):.1f} MB). Skipping HF download.")
+        return local_file
     token = token or _get_hf_token()
     try:
         from huggingface_hub import hf_hub_download

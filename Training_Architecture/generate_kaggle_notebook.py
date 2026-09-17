@@ -320,6 +320,10 @@ class HFCheckpointManager:
             return False
 
     def download_checkpoint(self, hf_filename: str) -> str | None:
+        local_path = os.path.join(self.local_dir, hf_filename)
+        if not hf_filename.endswith(".txt") and os.path.exists(local_path) and os.path.getsize(local_path) > 1024 * 1024:
+            print(f"[✓] Checkpoint '{hf_filename}' already exists locally ({os.path.getsize(local_path)/(1024*1024):.1f} MB). Skipping download.")
+            return local_path
         try:
             print(f"[*] Fetching '{hf_filename}' from Hugging Face Hub [{self.repo_id}]...")
             dest = hf_hub_download(
@@ -334,6 +338,26 @@ class HFCheckpointManager:
         except Exception as e:
             print(f"[-] Checkpoint '{hf_filename}' not available on HF Hub ({e}).")
             return None
+
+    def has_stage2_checkpoint(self) -> bool:
+        \"\"\"Checks if a Stage 2 checkpoint exists locally or on HF Hub without downloading large weights.\"\"\"
+        import glob
+        # 1. Local disk check
+        if glob.glob(os.path.join(self.local_dir, "checkpoint-*.pth")) or glob.glob(os.path.join(self.local_dir, "kion_stage2_*.pth")):
+            return True
+        ptr_local = os.path.join(self.local_dir, "latest_stage2_checkpoint.txt")
+        if os.path.exists(ptr_local) and os.path.getsize(ptr_local) > 0:
+            return True
+        # 2. Remote HF Hub check
+        if self.api:
+            try:
+                files = self.api.list_repo_files(repo_id=self.repo_id, repo_type="model")
+                for f in files:
+                    if f.startswith("checkpoint-") or "stage2" in f:
+                        return True
+            except Exception:
+                pass
+        return False
 
     def find_latest_checkpoint(self, stage: str = "stage2") -> str | None:
         \"\"\"Finds and downloads the latest checkpoint from HF (checking latest pointer or checkpoint-<step>.pth).\"\"\"
@@ -409,36 +433,54 @@ Automatically detects the dataset in `/kaggle/input/` (supports pre-extracted Ka
     add_code("""import os
 import sys
 
-# Step 1: Detect dataset source under /kaggle/input (handles pre-extracted folders, batch zips, or archives)
-unpacker_mod = load_cell_script("03_data_unpacker_and_manifest.py")
+# Check if dataset is already unpacked and manifests exist
+wav_dir = "/kaggle/working/dataset/wavs"
+manifest_dir = "/kaggle/working/dataset"
+styletts2_data = os.path.join(STYLETTS2_DIR, "Data")
+train_manifest = os.path.join(styletts2_data, "kion_train_list.txt")
 
-train_source = unpacker_mod.find_dataset_source("train")
-val_source   = unpacker_mod.find_dataset_source("val")
-print(f"Train source : {train_source}")
-print(f"Val source   : {val_source}")
+if os.path.exists(train_manifest) and os.path.exists(wav_dir) and len(os.listdir(wav_dir)) > 50:
+    print(f"[✓] Dataset already prepared and manifests exist ({len(os.listdir(wav_dir))} WAV files found in {wav_dir}).")
+    print("    Skipping dataset extraction and manifest generation!")
+else:
+    # Step 1: Detect dataset source under /kaggle/input (handles pre-extracted folders, batch zips, or archives)
+    unpacker_mod = load_cell_script("03_data_unpacker_and_manifest.py")
 
-# Step 2: Run Extraction & Manifest Generation pipeline
-unpacker_mod.run_extraction_pipeline(
-    train_source=train_source,
-    val_source=val_source,
-    wav_dir="/kaggle/working/dataset/wavs",
-    manifest_dir="/kaggle/working/dataset",
-    styletts2_data_dir=os.path.join(STYLETTS2_DIR, "Data")
-)
-print("[✓] Dataset preparation & manifest generation complete!")""")
+    train_source = unpacker_mod.find_dataset_source("train")
+    val_source   = unpacker_mod.find_dataset_source("val")
+    print(f"Train source : {train_source}")
+    print(f"Val source   : {val_source}")
+
+    # Step 2: Run Extraction & Manifest Generation pipeline
+    unpacker_mod.run_extraction_pipeline(
+        train_source=train_source,
+        val_source=val_source,
+        wav_dir=wav_dir,
+        manifest_dir=manifest_dir,
+        styletts2_data_dir=styletts2_data
+    )
+    print("[✓] Dataset preparation & manifest generation complete!")""")
 
     # Cell 7: Feature Precomputation
     add_md("""## 7. GPU-Accelerated Feature Precomputation
-Extracts mel-spectrograms, pitch (F0), energy, and phoneme tokens with batch GPU acceleration.""")
+Extracts mel-spectrograms, pitch (F0), energy, and phoneme tokens with batch GPU acceleration.
+- **Auto-skip**: If Stage 2 checkpoint is detected on Hugging Face, this is **automatically skipped** because Stage 2 computes features dynamically on-the-fly!""")
 
-    add_code("""feat_mod = load_cell_script("04_feature_precomputation.py")
-
-print("[*] Starting fast GPU feature precomputation...")
-feat_mod.run_precomputation(
-    manifest_dir="/kaggle/working/dataset",
-    output_cache_dir="/kaggle/working/preprocessed_data"
-)
-print("[✓] Feature precomputation finished!")""")
+    add_code("""# If Stage 2 checkpoint exists on Hugging Face or locally, feature precomputation is not required
+if hf_manager.has_stage2_checkpoint():
+    print("=" * 60)
+    print("[✓] Stage 2 checkpoint detected on Hugging Face!")
+    print("    StyleTTS2 computes acoustic features dynamically on-the-fly during Stage 2.")
+    print("    Offline GPU feature precomputation is NOT required. Skipping Cell 7 automatically!")
+    print("=" * 60)
+else:
+    feat_mod = load_cell_script("04_feature_precomputation.py")
+    print("[*] Starting fast GPU feature precomputation...")
+    feat_mod.run_precomputation(
+        manifest_dir="/kaggle/working/dataset",
+        output_cache_dir="/kaggle/working/preprocessed_data"
+    )
+    print("[✓] Feature precomputation finished!")""")
 
     # Cell 8: Config Generation
     add_md("""## 8. Build Configuration for Kaggle Dual T4 (T4x2)
@@ -474,12 +516,11 @@ print("=" * 60)
 print("Stage 1 Acoustic Foundation Check & Training...")
 print("=" * 60)
 
-# 1. Check if Stage 2 is already underway/completed (Stage 1 is completed!)
-stage2_ckpt = hf_manager.find_latest_checkpoint(stage="stage2")
-if stage2_ckpt and os.path.exists(stage2_ckpt) and os.path.getsize(stage2_ckpt) > 1024 * 1024:
-    print(f"\\n[✓] STAGE 2 CHECKPOINT DETECTED: {os.path.basename(stage2_ckpt)} ({os.path.getsize(stage2_ckpt)/(1024*1024):.1f} MB)!")
-    print("    Stage 1 Acoustic Foundation was already completed in prior runs.")
-    print("    Skipping Stage 1 training automatically. Proceed directly to Cell 10 to continue Stage 2 training!")
+# 1. If Stage 2 checkpoint exists on Hugging Face or locally, Stage 1 is already finished!
+if hf_manager.has_stage2_checkpoint():
+    print(f"\\n[✓] STAGE 2 CHECKPOINT DETECTED ON HUGGING FACE!")
+    print("    Stage 1 Acoustic Foundation was already completed in prior runs and merged into Stage 2.")
+    print("    Skipping Stage 1 training completely! Proceed directly to Cell 10 for Stage 2.")
 else:
     # 2. Check if Stage 1 checkpoint is already completed on Hugging Face or locally
     stage1_ckpt = hf_manager.download_checkpoint("kion_stage1_best.pth")
