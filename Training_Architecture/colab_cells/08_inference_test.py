@@ -18,6 +18,13 @@ import soundfile as sf
 from pathlib import Path
 from tqdm import tqdm
 
+import logging
+import warnings
+
+# Suppress harmless phonemizer word mismatch warnings & PyTorch RNN contiguous memory warnings
+logging.getLogger("phonemizer").setLevel(logging.ERROR)
+warnings.filterwarnings("ignore", category=UserWarning, module="torch.nn.modules.rnn")
+
 # ─── PyTorch 2.6+ Compatibility ───────────────────────────────────────────────
 _orig_torch_load = torch.load
 def _compat_torch_load(*args, **kwargs):
@@ -246,46 +253,38 @@ def synthesize(
     s_dur   = kion_adapter(style_weights)   # (1, style_dim)
 
     # ── 4. Duration prediction via predictor sub-modules ─────────────────────
-    # We can't call predictor(d_en, ..., m=None) because predictor.forward does
-    # `en = d.transpose(-1,-2) @ m` which crashes when m is None.
-    # Instead we replicate the forward pass using sub-modules directly:
+    # d_feats is (1, T_text, d_hid + style_dim)
     d_feats = predictor.text_encoder(d_en, s_dur, input_lengths, text_mask)
-    # d_feats: (1, hidden, T_text)
-    # Run LSTM on the transposed sequence for duration estimation
-    _in_lens = input_lengths.cpu().numpy()
-    _x = torch.nn.utils.rnn.pack_padded_sequence(
-        d_feats.transpose(-1, -2), _in_lens, batch_first=True, enforce_sorted=False
-    )
     predictor.lstm.flatten_parameters()
-    _x, _ = predictor.lstm(_x)
-    _x, _ = torch.nn.utils.rnn.pad_packed_sequence(_x, batch_first=True)
-    # Pad back to T_text length
-    _x = torch.nn.functional.pad(_x, [0, 0, 0, d_feats.shape[-1] - _x.shape[1]])
-    pred_dur_logits = predictor.duration_proj(_x)             # (1, T_text, max_dur_bins)
-    pred_dur = torch.sigmoid(pred_dur_logits).sum(axis=-1) / pace  # (1, T_text)
+    _x, _ = predictor.lstm(d_feats)
+    pred_dur_logits = predictor.duration_proj(_x)                  # (1, T_text, max_dur_bins)
+    duration = torch.sigmoid(pred_dur_logits).sum(axis=-1) / pace   # (1, T_text)
+    pred_dur = torch.round(duration.squeeze()).clamp(min=1).long()
+    if pred_dur.dim() == 0:
+        pred_dur = pred_dur.unsqueeze(0)
 
     # ── 5. Length regulation (build alignment matrix) ─────────────────────────
-    pred_dur  = torch.round(pred_dur).clamp(min=1).long()
-    T_text    = texts.size(1)
     total_frames = int(pred_dur.sum().item())
     if total_frames % 2 != 0:
-        pred_dur[0, -1] += 1
-        total_frames    += 1
+        pred_dur[-1] += 1
+        total_frames += 1
 
+    T_text = texts.size(1)
     aln_hard = torch.zeros(T_text, total_frames, device=device)
     c = 0
     for i in range(T_text):
-        dur_i = int(pred_dur[0, i].item())
+        dur_i = int(pred_dur[i].item())
         if c + dur_i <= total_frames:
             aln_hard[i, c:c + dur_i] = 1
         c += dur_i
-    aln = aln_hard.unsqueeze(0)   # (1, T_text, T_frames)
+    aln = aln_hard.unsqueeze(0)   # (1, T_text, total_frames)
 
     # ── 6. Frame-level features ───────────────────────────────────────────────
-    # asr: acoustic features expanded to frame level (matches training: asr = t_en @ aln)
-    asr  = t_en @ aln              # (1, hidden, T_text) @ (1, T_text, T_frames) → (1, hidden, T_frames)
+    # asr: acoustic features expanded to frame level (1, hidden, total_frames)
+    asr = t_en @ aln
     # p_en: prosody features (matches training: en = d.transpose(-1,-2) @ m)
-    p_en = d_feats @ aln           # (1, hidden, T_text) @ (1, T_text, T_frames) → (1, hidden, T_frames)
+    # d_feats is (1, T_text, hidden+style), transposed to (1, hidden+style, T_text)
+    p_en = d_feats.transpose(-1, -2) @ aln  # (1, hidden+style, total_frames)
 
     # ── 7. F0 and Energy prediction ───────────────────────────────────────────
     F0_pred, N_pred = predictor.F0Ntrain(p_en, s_dur)
