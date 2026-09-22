@@ -209,86 +209,92 @@ def synthesize(
     """
     torch.manual_seed(seed)
 
-    # Parse text and tags
+    # ── Parse text and style tags ──────────────────────────────────────────────
     full_input = f"{style_tag} {text}".strip()
     cleaned_text, emotions, styles_dict = parse_tagged_text(full_input)
     style_vec = create_style_vector(emotions, styles_dict)
 
-    # Phonemise
-    phoneme_ids = phonemize_text(cleaned_text)   # returns list[int]
-    tokens      = torch.tensor(phoneme_ids, dtype=torch.long, device=device).unsqueeze(0)  # (1, T)
+    # ── Phonemise ──────────────────────────────────────────────────────────────
+    phoneme_ids  = phonemize_text(cleaned_text)
+    texts        = torch.tensor(phoneme_ids, dtype=torch.long, device=device).unsqueeze(0)  # (1, T)
+    input_lengths = torch.tensor([texts.size(1)], dtype=torch.long, device=device)
+    text_mask     = torch.zeros(1, texts.size(1), dtype=torch.bool, device=device)
 
-    # Style weight tensor
+    # ── Style weight tensor for KionStyleAdapter ───────────────────────────────
     style_weights = torch.tensor(style_vec, dtype=torch.float32, device=device).unsqueeze(0)  # (1, N_tags)
 
-    style_adapter = model["kion_style_adapter"]
-    text_encoder  = model["text_encoder"]
-    predictor     = model["predictor"]
-    decoder       = model["decoder"]
+    # Shorthand refs — all already on device and in float32 from load_kion_model
+    text_encoder      = model["text_encoder"]
+    bert              = model["bert"]
+    bert_encoder      = model["bert_encoder"]
+    predictor         = model["predictor"]
+    predictor_encoder = model["predictor_encoder"]
+    style_encoder     = model["style_encoder"]
+    kion_adapter      = model["kion_style_adapter"]
+    decoder           = model["decoder"]
 
-    style_adapter.eval()
-    text_encoder.eval()
-    predictor.eval()
-    decoder.eval()
+    # ── 1. Text encoding (matches training line: t_en = text_encoder(texts, ...)) ──
+    t_en = text_encoder(texts, input_lengths, text_mask)  # (1, hidden, T_text)
 
-    # 1. Compute latent style from tags
-    s = style_adapter(style_weights)  # (1, style_dim)
+    # ── 2. BERT prosody encoding (matches training: bert_dur → bert_encoder → d_en) ──
+    bert_dur = bert(texts, attention_mask=(~text_mask).int())
+    d_en     = bert_encoder(bert_dur).transpose(-1, -2)   # (1, hidden, T_text)
 
-    # 2. Text encode
-    text_lengths = torch.tensor([tokens.size(1)], device=device, dtype=torch.long)
-    text_mask    = torch.zeros(1, tokens.size(1), device=device, dtype=torch.bool)
-    text_feats   = text_encoder(tokens, text_lengths, text_mask)  # (1, hidden_dim, T_text)
+    # ── 3. Style vector for duration predictor ─────────────────────────────────
+    # During training s_dur comes from predictor_encoder(mel). At inference we
+    # use KionStyleAdapter to produce a style vector of the same dimension.
+    s_dur   = kion_adapter(style_weights)   # (1, style_dim)
 
-    # 3. Predict durations
-    d = predictor.text_encoder(text_feats, s, text_lengths, text_mask)
-    input_lengths = text_lengths.cpu().numpy()
-    x = torch.nn.utils.rnn.pack_padded_sequence(d, input_lengths, batch_first=True, enforce_sorted=False)
-    predictor.lstm.flatten_parameters()
-    x, _ = predictor.lstm(x)
-    x, _ = torch.nn.utils.rnn.pad_packed_sequence(x, batch_first=True)
-    pred_dur = predictor.duration_proj(x)
-    pred_dur = torch.sigmoid(pred_dur).sum(axis=-1) / pace
+    # ── 4. Predict durations via predictor ────────────────────────────────────
+    # predictor(d_en, s_dur, input_lengths, attn=None, text_mask)
+    # returns (d, p) where d contains per-token duration logits
+    d, _ = predictor(d_en, s_dur, input_lengths, None, text_mask)
+    # d: (1, T_text, max_dur_bins) — sum sigmoid for expected duration per token
+    pred_dur = torch.sigmoid(d).sum(axis=-1) / pace   # (1, T_text)
 
-    # 4. Length regulation to frame representations
-    pred_dur = torch.round(pred_dur).clamp(min=1).long()
+    # ── 5. Length regulation (build alignment matrix) ─────────────────────────
+    pred_dur  = torch.round(pred_dur).clamp(min=1).long()
+    T_text    = texts.size(1)
     total_frames = int(pred_dur.sum().item())
     if total_frames % 2 != 0:
         pred_dur[0, -1] += 1
-        total_frames += 1
+        total_frames    += 1
 
-    pred_aln_trg = torch.zeros(tokens.size(1), total_frames, device=device)
-    c_frame = 0
-    for i in range(tokens.size(1)):
+    aln_hard = torch.zeros(T_text, total_frames, device=device)
+    c = 0
+    for i in range(T_text):
         dur_i = int(pred_dur[0, i].item())
-        if c_frame + dur_i <= total_frames:
-            pred_aln_trg[i, c_frame : c_frame + dur_i] = 1
-        c_frame += dur_i
+        if c + dur_i <= total_frames:
+            aln_hard[i, c:c + dur_i] = 1
+        c += dur_i
+    aln = aln_hard.unsqueeze(0)   # (1, T_text, T_frames)
 
-    # Acoustic and prosodic frame expansion
-    aln_matrix = pred_aln_trg.unsqueeze(0)        # (1, T_text, T_frames)
-    asr = text_feats @ aln_matrix                 # (1, hidden_dim, T_frames)
-    en = d.transpose(-1, -2) @ aln_matrix         # (1, hidden_dim, T_frames)
+    # ── 6. Frame-level acoustic + prosody features ────────────────────────────
+    # asr: (1, hidden, T_frames)  —  matches training: asr = t_en @ aln
+    asr = t_en @ aln          # (1, hidden, T_text) @ (1, T_text, T_frames)
+    # p_en: (1, hidden, T_frames) — used for F0/N prediction
+    p_en = (d_en @ aln)       # same shape
 
-    # 5. Predict F0 and N curves
-    F0_pred, N_pred = predictor.F0Ntrain(en, s)
+    # ── 7. F0 and Energy prediction ───────────────────────────────────────────
+    F0_pred, N_pred = predictor.F0Ntrain(p_en, s_dur)
 
-    # 6. Synthesize audio waveform via Neural Vocoder Decoder
-    waveform = decoder(asr, F0_pred, N_pred, s)
+    # ── 8. Decoder (iSTFTNet vocoder) ─────────────────────────────────────────
+    waveform = decoder(asr, F0_pred, N_pred, s_dur)
     wav = waveform.squeeze().cpu().float().numpy()
 
-    # Replace NaN/Inf from fp16 overflow before any stats
+    # Sanitise any residual NaN/Inf
     wav = np.nan_to_num(wav, nan=0.0, posinf=0.0, neginf=0.0)
 
-    # Diagnostic: print amplitude info
+    # Diagnostics
     peak = float(np.abs(wav).max()) if wav.size > 0 else 0.0
     rms  = float(np.sqrt(np.mean(wav**2))) if wav.size > 0 else 0.0
     print(f"     [dbg] wav shape={wav.shape}, peak={peak:.6f}, rms={rms:.6f}")
 
-    # Normalize to [-1, 1] to avoid silent/clipped output
+    # Normalise to [-0.95, 0.95]
     if peak > 1e-6:
         wav = wav / peak * 0.95
     else:
-        print("     [!] WARNING: waveform is near-silent — model may not be conditioned correctly")
+        print("     [!] WARNING: near-silent output — check model/checkpoint")
 
     return wav
 
