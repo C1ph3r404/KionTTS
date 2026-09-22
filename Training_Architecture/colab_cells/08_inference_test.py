@@ -217,6 +217,9 @@ def synthesize(
     phoneme_ids = phonemize_text(cleaned_text)   # returns list[int]
     tokens      = torch.tensor(phoneme_ids, dtype=torch.long, device=device).unsqueeze(0)  # (1, T)
 
+    # Style weight tensor
+    style_weights = torch.tensor(style_vec, dtype=torch.float32, device=device).unsqueeze(0)  # (1, N_tags)
+
     style_adapter = model["kion_style_adapter"]
     text_encoder  = model["text_encoder"]
     predictor     = model["predictor"]
