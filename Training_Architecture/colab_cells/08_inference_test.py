@@ -153,14 +153,21 @@ def load_kion_model(config_path: str, checkpoint_path: str, device: torch.device
     model = build_model(model_params, text_aligner, pitch_extractor, plbert)
 
     # Add KionStyleAdapter
-    ksa_cfg = config["model_params"]["kion_style_adapter"]
+    ksa_cfg = config["model_params"].get("kion_style_adapter", {
+        "num_emotions": 14,
+        "num_styles": 10,
+        "tag_embed_dim": 64,
+        "latent_style_dim": config["model_params"].get("style_dim", 128),
+        "hidden_dim": config["model_params"].get("hidden_dim", 512) // 2,
+        "dropout": 0.1,
+    })
     model["kion_style_adapter"] = KionStyleAdapter(
-        num_emotions=ksa_cfg["num_emotions"],
-        num_styles=ksa_cfg["num_styles"],
-        tag_embed_dim=ksa_cfg["tag_embed_dim"],
-        latent_style_dim=ksa_cfg["latent_style_dim"],
-        hidden_dim=ksa_cfg["hidden_dim"],
-        dropout=ksa_cfg["dropout"],
+        num_emotions=ksa_cfg.get("num_emotions", 14),
+        num_styles=ksa_cfg.get("num_styles", 10),
+        tag_embed_dim=ksa_cfg.get("tag_embed_dim", 64),
+        latent_style_dim=ksa_cfg.get("latent_style_dim", 128),
+        hidden_dim=ksa_cfg.get("hidden_dim", 256),
+        dropout=ksa_cfg.get("dropout", 0.1),
     ).to(device)
 
     # Load weights
