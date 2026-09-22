@@ -63,7 +63,15 @@ for p in [REPO_ROOT, STYLETTS2_ROOT]:
 import yaml
 from munch import Munch
 from models import build_model, load_ASR_models, load_F0_models, load_checkpoint
-from utils import recursive_munch
+try:
+    from utils import recursive_munch
+except Exception:
+    def recursive_munch(d):
+        if isinstance(d, dict):
+            return Munch((k, recursive_munch(v)) for k, v in d.items())
+        elif isinstance(d, list):
+            return [recursive_munch(v) for v in d]
+        return d
 from Utils.PLBERT.util import load_plbert
 
 from model.models.kion_styletts2 import KionStyleTTS2

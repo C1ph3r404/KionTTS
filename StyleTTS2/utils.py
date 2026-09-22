@@ -1,6 +1,11 @@
-from monotonic_align import maximum_path
-from monotonic_align import mask_from_lens
-from monotonic_align.core import maximum_path_c
+try:
+    from monotonic_align import maximum_path
+    from monotonic_align import mask_from_lens
+    from monotonic_align.core import maximum_path_c
+except ImportError:
+    maximum_path = None
+    mask_from_lens = None
+    maximum_path_c = None
 import numpy as np
 import torch
 import copy
