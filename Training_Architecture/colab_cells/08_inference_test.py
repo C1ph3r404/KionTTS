@@ -245,12 +245,24 @@ def synthesize(
     # use KionStyleAdapter to produce a style vector of the same dimension.
     s_dur   = kion_adapter(style_weights)   # (1, style_dim)
 
-    # ── 4. Predict durations via predictor ────────────────────────────────────
-    # predictor(d_en, s_dur, input_lengths, attn=None, text_mask)
-    # returns (d, p) where d contains per-token duration logits
-    d, _ = predictor(d_en, s_dur, input_lengths, None, text_mask)
-    # d: (1, T_text, max_dur_bins) — sum sigmoid for expected duration per token
-    pred_dur = torch.sigmoid(d).sum(axis=-1) / pace   # (1, T_text)
+    # ── 4. Duration prediction via predictor sub-modules ─────────────────────
+    # We can't call predictor(d_en, ..., m=None) because predictor.forward does
+    # `en = d.transpose(-1,-2) @ m` which crashes when m is None.
+    # Instead we replicate the forward pass using sub-modules directly:
+    d_feats = predictor.text_encoder(d_en, s_dur, input_lengths, text_mask)
+    # d_feats: (1, hidden, T_text)
+    # Run LSTM on the transposed sequence for duration estimation
+    _in_lens = input_lengths.cpu().numpy()
+    _x = torch.nn.utils.rnn.pack_padded_sequence(
+        d_feats.transpose(-1, -2), _in_lens, batch_first=True, enforce_sorted=False
+    )
+    predictor.lstm.flatten_parameters()
+    _x, _ = predictor.lstm(_x)
+    _x, _ = torch.nn.utils.rnn.pad_packed_sequence(_x, batch_first=True)
+    # Pad back to T_text length
+    _x = torch.nn.functional.pad(_x, [0, 0, 0, d_feats.shape[-1] - _x.shape[1]])
+    pred_dur_logits = predictor.duration_proj(_x)             # (1, T_text, max_dur_bins)
+    pred_dur = torch.sigmoid(pred_dur_logits).sum(axis=-1) / pace  # (1, T_text)
 
     # ── 5. Length regulation (build alignment matrix) ─────────────────────────
     pred_dur  = torch.round(pred_dur).clamp(min=1).long()
@@ -269,11 +281,11 @@ def synthesize(
         c += dur_i
     aln = aln_hard.unsqueeze(0)   # (1, T_text, T_frames)
 
-    # ── 6. Frame-level acoustic + prosody features ────────────────────────────
-    # asr: (1, hidden, T_frames)  —  matches training: asr = t_en @ aln
-    asr = t_en @ aln          # (1, hidden, T_text) @ (1, T_text, T_frames)
-    # p_en: (1, hidden, T_frames) — used for F0/N prediction
-    p_en = (d_en @ aln)       # same shape
+    # ── 6. Frame-level features ───────────────────────────────────────────────
+    # asr: acoustic features expanded to frame level (matches training: asr = t_en @ aln)
+    asr  = t_en @ aln              # (1, hidden, T_text) @ (1, T_text, T_frames) → (1, hidden, T_frames)
+    # p_en: prosody features (matches training: en = d.transpose(-1,-2) @ m)
+    p_en = d_feats @ aln           # (1, hidden, T_text) @ (1, T_text, T_frames) → (1, hidden, T_frames)
 
     # ── 7. F0 and Energy prediction ───────────────────────────────────────────
     F0_pred, N_pred = predictor.F0Ntrain(p_en, s_dur)
