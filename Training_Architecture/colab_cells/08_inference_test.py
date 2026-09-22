@@ -170,12 +170,13 @@ def load_kion_model(config_path: str, checkpoint_path: str, device: torch.device
         dropout=ksa_cfg.get("dropout", 0.1),
     ).to(device)
 
-    # Load weights
+    # Load weights and move every component to device
     ckpt = torch.load(checkpoint_path, map_location=device)
     for k in model:
         if k in ckpt["net"]:
             model[k].load_state_dict(ckpt["net"][k])
-            model[k].eval()
+        model[k].to(device)
+        model[k].eval()
 
     print(f"[+] KionStyleTTS2 loaded from: {checkpoint_path}")
     print(f"    Epoch: {ckpt.get('epoch', '?')} | Val loss: {ckpt.get('val_loss', '?'):.4f}")
