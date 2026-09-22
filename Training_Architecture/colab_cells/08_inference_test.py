@@ -289,20 +289,27 @@ def synthesize(
     # ── 7. F0 and Energy prediction ───────────────────────────────────────────
     F0_pred, N_pred = predictor.F0Ntrain(p_en, s_dur)
 
+    # Physiological clamping: human voice fundamental pitch is 0-800Hz
+    # Prevents early-epoch predictor instability from triggering vocoder harmonic explosion
+    F0_pred = F0_pred.clamp(min=0.0, max=800.0)
+    N_pred  = N_pred.clamp(min=-15.0, max=15.0)
+
     # ── 8. Decoder (iSTFTNet vocoder) ─────────────────────────────────────────
     waveform = decoder(asr, F0_pred, N_pred, s_dur)
     wav = waveform.squeeze().cpu().float().numpy()
 
-    # Sanitise any residual NaN/Inf
-    wav = np.nan_to_num(wav, nan=0.0, posinf=0.0, neginf=0.0)
+    # Sanitise any residual NaN/Inf and clip vocoder edge burst spikes to [-1.0, 1.0]
+    wav = np.nan_to_num(wav, nan=0.0, posinf=1.0, neginf=-1.0)
+    wav = np.clip(wav, -1.0, 1.0)
 
     # Diagnostics
     peak = float(np.abs(wav).max()) if wav.size > 0 else 0.0
     rms  = float(np.sqrt(np.mean(wav**2))) if wav.size > 0 else 0.0
-    print(f"     [dbg] wav shape={wav.shape}, peak={peak:.6f}, rms={rms:.6f}")
+    f0_mean = float(F0_pred.mean().item())
+    print(f"     [dbg] wav shape={wav.shape}, peak={peak:.4f}, rms={rms:.4f}, F0_mean={f0_mean:.1f}Hz")
 
-    # Normalise to [-0.95, 0.95]
-    if peak > 1e-6:
+    # Normalise audible speech to [-0.95, 0.95]
+    if peak > 1e-4:
         wav = wav / peak * 0.95
     else:
         print("     [!] WARNING: near-silent output — check model/checkpoint")
