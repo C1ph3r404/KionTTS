@@ -170,12 +170,12 @@ def load_kion_model(config_path: str, checkpoint_path: str, device: torch.device
         dropout=ksa_cfg.get("dropout", 0.1),
     ).to(device)
 
-    # Load weights and move every component to device
+    # Load weights, force float32 (AMP checkpoints save as fp16 which overflows at inference)
     ckpt = torch.load(checkpoint_path, map_location=device)
     for k in model:
         if k in ckpt["net"]:
             model[k].load_state_dict(ckpt["net"][k])
-        model[k].to(device)
+        model[k].float().to(device)
         model[k].eval()
 
     print(f"[+] KionStyleTTS2 loaded from: {checkpoint_path}")
@@ -276,9 +276,13 @@ def synthesize(
     waveform = decoder(asr, F0_pred, N_pred, s)
     wav = waveform.squeeze().cpu().float().numpy()
 
+    # Replace NaN/Inf from fp16 overflow before any stats
+    wav = np.nan_to_num(wav, nan=0.0, posinf=0.0, neginf=0.0)
+
     # Diagnostic: print amplitude info
     peak = float(np.abs(wav).max()) if wav.size > 0 else 0.0
-    print(f"     [dbg] wav shape={wav.shape}, peak={peak:.6f}, rms={float(np.sqrt(np.mean(wav**2))):.6f}")
+    rms  = float(np.sqrt(np.mean(wav**2))) if wav.size > 0 else 0.0
+    print(f"     [dbg] wav shape={wav.shape}, peak={peak:.6f}, rms={rms:.6f}")
 
     # Normalize to [-1, 1] to avoid silent/clipped output
     if peak > 1e-6:
