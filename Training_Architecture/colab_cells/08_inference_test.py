@@ -274,7 +274,19 @@ def synthesize(
 
     # 6. Synthesize audio waveform via Neural Vocoder Decoder
     waveform = decoder(asr, F0_pred, N_pred, s)
-    return waveform.squeeze().cpu().numpy()
+    wav = waveform.squeeze().cpu().float().numpy()
+
+    # Diagnostic: print amplitude info
+    peak = float(np.abs(wav).max()) if wav.size > 0 else 0.0
+    print(f"     [dbg] wav shape={wav.shape}, peak={peak:.6f}, rms={float(np.sqrt(np.mean(wav**2))):.6f}")
+
+    # Normalize to [-1, 1] to avoid silent/clipped output
+    if peak > 1e-6:
+        wav = wav / peak * 0.95
+    else:
+        print("     [!] WARNING: waveform is near-silent — model may not be conditioned correctly")
+
+    return wav
 
 
 # ─── Evaluation Suite ─────────────────────────────────────────────────────────
