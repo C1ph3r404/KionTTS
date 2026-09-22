@@ -40,9 +40,16 @@ def _get_repo_root() -> str:
     return "/content/KionTTS"
 
 
+def _get_ckpt_dir() -> str:
+    for p in ["/content/drive/MyDrive/KionTTS_Checkpoints", "/kaggle/working/checkpoints", "/kaggle/working", "/content/checkpoints"]:
+        if os.path.exists(p):
+            return p
+    return "/content/drive/MyDrive/KionTTS_Checkpoints" if os.path.exists("/content") else "/kaggle/working/checkpoints"
+
+
 REPO_ROOT      = _get_repo_root()
 STYLETTS2_ROOT = f"{REPO_ROOT}/StyleTTS2"
-DRIVE_CKPT_DIR = "/content/drive/MyDrive/KionTTS_Checkpoints"
+DRIVE_CKPT_DIR = _get_ckpt_dir()
 EVAL_DIR       = os.path.join(DRIVE_CKPT_DIR, "eval_samples")
 STAGE2_FINAL   = os.path.join(DRIVE_CKPT_DIR, "kion_stage2_final.pth")
 STAGE2_BEST    = os.path.join(DRIVE_CKPT_DIR, "kion_stage2_best.pth")
@@ -195,19 +202,60 @@ def synthesize(
     phoneme_ids = phonemize_text(cleaned_text)   # returns list[int]
     tokens      = torch.tensor(phoneme_ids, dtype=torch.long, device=device).unsqueeze(0)  # (1, T)
 
-    # Style weight tensor
-    style_weights = torch.tensor(style_vec, dtype=torch.float32, device=device).unsqueeze(0)  # (1, 24)
+    style_adapter = model["kion_style_adapter"]
+    text_encoder  = model["text_encoder"]
+    predictor     = model["predictor"]
+    decoder       = model["decoder"]
 
-    # Build KionStyleTTS2 wrapper for synthesize()
-    kion_model = KionStyleTTS2.__new__(KionStyleTTS2)
-    kion_model.style_adapter  = model["kion_style_adapter"]
-    kion_model.text_encoder   = model["text_encoder"]
-    kion_model.predictor      = model["predictor"]
-    kion_model.decoder        = model["decoder"]
-    kion_model.style_encoder  = model["style_encoder"]
+    style_adapter.eval()
+    text_encoder.eval()
+    predictor.eval()
+    decoder.eval()
 
-    waveform = kion_model.synthesize(tokens, style_weights, pace=pace)  # (1, T_samples)
-    return waveform.squeeze(0).cpu().numpy()
+    # 1. Compute latent style from tags
+    s = style_adapter(style_weights)  # (1, style_dim)
+
+    # 2. Text encode
+    text_lengths = torch.tensor([tokens.size(1)], device=device, dtype=torch.long)
+    text_mask    = torch.zeros(1, tokens.size(1), device=device, dtype=torch.bool)
+    text_feats   = text_encoder(tokens, text_lengths, text_mask)  # (1, hidden_dim, T_text)
+
+    # 3. Predict durations
+    d = predictor.text_encoder(text_feats, s, text_lengths, text_mask)
+    input_lengths = text_lengths.cpu().numpy()
+    x = torch.nn.utils.rnn.pack_padded_sequence(d, input_lengths, batch_first=True, enforce_sorted=False)
+    predictor.lstm.flatten_parameters()
+    x, _ = predictor.lstm(x)
+    x, _ = torch.nn.utils.rnn.pad_packed_sequence(x, batch_first=True)
+    pred_dur = predictor.duration_proj(x)
+    pred_dur = torch.sigmoid(pred_dur).sum(axis=-1) / pace
+
+    # 4. Length regulation to frame representations
+    pred_dur = torch.round(pred_dur).clamp(min=1).long()
+    total_frames = int(pred_dur.sum().item())
+    if total_frames % 2 != 0:
+        pred_dur[0, -1] += 1
+        total_frames += 1
+
+    pred_aln_trg = torch.zeros(tokens.size(1), total_frames, device=device)
+    c_frame = 0
+    for i in range(tokens.size(1)):
+        dur_i = int(pred_dur[0, i].item())
+        if c_frame + dur_i <= total_frames:
+            pred_aln_trg[i, c_frame : c_frame + dur_i] = 1
+        c_frame += dur_i
+
+    # Acoustic and prosodic frame expansion
+    aln_matrix = pred_aln_trg.unsqueeze(0)        # (1, T_text, T_frames)
+    asr = text_feats @ aln_matrix                 # (1, hidden_dim, T_frames)
+    en = d.transpose(-1, -2) @ aln_matrix         # (1, hidden_dim, T_frames)
+
+    # 5. Predict F0 and N curves
+    F0_pred, N_pred = predictor.F0Ntrain(en, s)
+
+    # 6. Synthesize audio waveform via Neural Vocoder Decoder
+    waveform = decoder(asr, F0_pred, N_pred, s)
+    return waveform.squeeze().cpu().numpy()
 
 
 # ─── Evaluation Suite ─────────────────────────────────────────────────────────
@@ -334,12 +382,22 @@ if __name__ == "__main__":
     print(f"Device: {device}")
 
     # Pick best available checkpoint
-    ckpt_path = STAGE2_BEST if os.path.exists(STAGE2_BEST) else STAGE2_FINAL
-    if not os.path.exists(ckpt_path):
+    ckpt_path = None
+    for cand in [STAGE2_BEST, STAGE2_FINAL, os.path.join(DRIVE_CKPT_DIR, "kion_stage2_latest.pth")]:
+        if os.path.exists(cand):
+            ckpt_path = cand
+            break
+    if not ckpt_path:
+        import glob
+        steps = glob.glob(os.path.join(DRIVE_CKPT_DIR, "checkpoint-*.pth"))
+        if steps:
+            ckpt_path = sorted(steps, key=os.path.getmtime, reverse=True)[0]
+
+    if not ckpt_path or not os.path.exists(ckpt_path):
         raise FileNotFoundError(
-            f"No Stage 2 checkpoint found.\n"
-            f"Expected: {STAGE2_BEST} or {STAGE2_FINAL}\n"
-            "Run Cell 07 first."
+            f"No Stage 2 checkpoint found in {DRIVE_CKPT_DIR}.\n"
+            f"Expected: {STAGE2_BEST}, {STAGE2_FINAL}, or step checkpoints.\n"
+            "Run Stage 2 training first or download checkpoint from Hugging Face."
         )
 
     model, config = load_kion_model(CONFIG_PATH, ckpt_path, device)
