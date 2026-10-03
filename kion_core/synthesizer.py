@@ -57,7 +57,13 @@ class KionSynthesizer:
         self.phonemizer_fn = phonemizer_fn
         self.device = device
 
-        self.model.eval()
+        if isinstance(self.model, dict) or hasattr(self.model, "keys"):
+            for k in self.model.keys():
+                if hasattr(self.model[k], "eval"):
+                    self.model[k].eval()
+        elif hasattr(self.model, "eval"):
+            self.model.eval()
+
         self.tag_encoder.eval()
 
     def text_to_tokens(self, text: str):
