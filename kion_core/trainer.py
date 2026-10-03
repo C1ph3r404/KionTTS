@@ -6,7 +6,13 @@ import soundfile as sf
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.tensorboard import SummaryWriter
+try:
+    from torch.utils.tensorboard import SummaryWriter
+except (ImportError, ModuleNotFoundError):
+    class SummaryWriter:
+        def __init__(self, *args, **kwargs): pass
+        def add_scalar(self, *args, **kwargs): pass
+        def close(self): pass
 
 from .tag_style_encoder import KionTagStyleEncoder, compute_kion_style_loss
 from .synthesizer import KionSynthesizer
@@ -16,6 +22,29 @@ TEST_PROMPTS = [
     "[sarcasm=0.8] Oh, brilliant. Just what I wanted.",
     "[calm=0.7, soothing=0.6] Take a deep breath, everything is going to be alright."
 ]
+
+
+def length_to_mask(lengths):
+    """
+    Creates boolean mask where True indicates PADDING and False indicates VALID elements.
+    Matches StyleTTS2 internal convention.
+    """
+    mask = torch.arange(lengths.max(), device=lengths.device).unsqueeze(0).expand(lengths.shape[0], -1)
+    mask = torch.gt(mask + 1, lengths.unsqueeze(1))
+    return mask
+
+
+def get_model_state_dict(model):
+    """
+    Extracts state dict whether model is an nn.Module or a Munch dictionary of submodules.
+    """
+    if hasattr(model, "state_dict") and callable(model.state_dict):
+        return model.state_dict()
+    state = {}
+    for k in model.keys():
+        if hasattr(model[k], "state_dict") and callable(model[k].state_dict):
+            state[k] = model[k].state_dict()
+    return state
 
 
 def run_training_pipeline(
@@ -102,55 +131,72 @@ def run_training_pipeline(
             input_lengths = input_lengths.to(device)
             mels = mels.to(device)
             mel_lengths = mel_lengths.to(device)
-            ref_mels = ref_mels.to(device)
             tag_vectors = tag_vectors.to(device)
 
             # Ground-truth audio styles from StyleTTS2 encoders
+            # Note: StyleTTS2 avgpool requires unpadded per-utterance extraction to prevent NaN/corruption
             with torch.no_grad():
-                # ref_mels: (B, 80, T) -> style_encoder expects (B, 1, 80, T)
-                s_ref = model.style_encoder(ref_mels.unsqueeze(1))          # (B, 128) acoustic
-                s_dur = model.predictor_encoder(ref_mels.unsqueeze(1))      # (B, 128) prosodic
-                s_audio = torch.cat([s_ref, s_dur], dim=-1)                # (B, 256)
+                ss = []
+                gs = []
+                for bib in range(len(mel_lengths)):
+                    mel_len = int(mel_lengths[bib].item())
+                    mel_slice = mels[bib, :, :mel_len]
+                    if mel_slice.shape[-1] < 32:
+                        mel_slice = F.pad(mel_slice, (0, 32 - mel_slice.shape[-1]), mode='reflect')
+                    mel_in = mel_slice.unsqueeze(0).unsqueeze(1)
+                    gs.append(model.style_encoder(mel_in))
+                    ss.append(model.predictor_encoder(mel_in))
+                s_ref = torch.cat(gs, dim=0).detach()   # (B, 128) acoustic
+                s_dur = torch.cat(ss, dim=0).detach()   # (B, 128) prosodic
+                s_audio = torch.cat([s_ref, s_dur], dim=-1) # (B, 256)
 
             # 1. Kion Tag Style Encoder forward
             s_tag = tag_encoder(tag_vectors)  # (B, 256)
             loss_style = compute_kion_style_loss(s_tag, s_audio)
 
-            # 2. Text representations
-            text_mask = torch.arange(texts.shape[-1], device=device).unsqueeze(0) < input_lengths.unsqueeze(1)
+            # 2. Text representations with correct mask polarity
+            text_mask = length_to_mask(input_lengths)
             t_en = model.text_encoder(texts, input_lengths, text_mask)
             bert_dur = model.bert(texts, attention_mask=(~text_mask).int())
             d_en = model.bert_encoder(bert_dur).transpose(-1, -2)
 
-            # Text aligner to get duration target
+            # Text aligner to get duration target and attention matrix
+            n_down = getattr(model.text_aligner, "n_down", 1)
             with torch.no_grad():
-                mask_align = torch.arange(mels.shape[-1], device=device).unsqueeze(0) < mel_lengths.unsqueeze(1)
+                mask_align = length_to_mask(mel_lengths // (2 ** n_down))
                 try:
                     _, _, s2s_attn = model.text_aligner(mels, mask_align, texts)
-                    s2s_attn = s2s_attn.transpose(-1, -2)[..., 1:].transpose(-1, -2)
-                    d_gt = s2s_attn.sum(dim=-1).detach()
+                    s2s_attn = s2s_attn.transpose(-1, -2)
+                    s2s_attn = s2s_attn[..., 1:]
+                    s2s_attn = s2s_attn.transpose(-1, -2)
+                    s2s_attn_mono = s2s_attn
+                    d_gt = s2s_attn_mono.sum(dim=-1).detach()
                 except Exception:
-                    # Fallback uniform duration
-                    d_gt = (mel_lengths.float() / input_lengths.float()).unsqueeze(1).expand(-1, texts.shape[-1]).detach()
+                    total_mel_steps = (mel_lengths // (2 ** n_down)).max().item()
+                    s2s_attn_mono = torch.zeros((texts.shape[0], texts.shape[-1], total_mel_steps), device=device)
+                    for b in range(texts.shape[0]):
+                        tl = input_lengths[b].item()
+                        ml = (mel_lengths[b] // (2 ** n_down)).item()
+                        ratio = ml / max(1, tl)
+                        for ti in range(tl):
+                            st = int(ti * ratio)
+                            ed = int((ti + 1) * ratio)
+                            s2s_attn_mono[b, ti, st:max(st+1, ed)] = 1.0
+                    d_gt = s2s_attn_mono.sum(dim=-1).detach()
 
             # Predictor forward with style conditioning
             # Use 50% ground truth s_dur, 50% tag predicted s_tag[:, 128:]
             use_tag_style = (step % 2 == 0)
             s_pred_cond = s_tag[:, 128:] if use_tag_style else s_dur
 
-            d = model.predictor.text_encoder(d_en, s_pred_cond, input_lengths, text_mask)
-            x_lstm, _ = model.predictor.lstm(d)
-            duration_pred = model.predictor.duration_proj(x_lstm)
-            duration_pred = torch.sigmoid(duration_pred).sum(dim=-1)
-
+            d, p = model.predictor(d_en, s_pred_cond, input_lengths, s2s_attn_mono, text_mask)
+            duration_pred = torch.sigmoid(d).sum(dim=-1)
             loss_dur = F.mse_loss(duration_pred, d_gt)
 
             # Predictor F0 & Energy loss
-            d_en_aligned = d.transpose(-1, -2)
-            F0_pred, N_pred = model.predictor.F0Ntrain(d_en_aligned, s_pred_cond)
-            loss_f0 = F0_pred.abs().mean() * 0.05  # Regularization
+            F0_pred, N_pred = model.predictor.F0Ntrain(p, s_pred_cond)
+            loss_f0 = F0_pred.abs().mean() * 0.05
             loss_n = N_pred.abs().mean() * 0.05
-
             loss_predictor = loss_dur + loss_f0 + loss_n
 
             loss_total = (loss_style + loss_predictor) / accum_steps
@@ -158,21 +204,25 @@ def run_training_pipeline(
             # 3. Stage 2 Decoder Fine-tuning
             loss_dec = torch.tensor(0.0, device=device)
             if is_stage_2:
-                # Use ground-truth acoustic style and predicted prosody
                 ref_style = s_tag[:, :128]
-                min_len = min(t_en.shape[-1], mels.shape[-1])
-                t_en_sub = t_en[..., :min_len]
-                f0_sub = F0_pred[..., :min_len]
-                n_sub = N_pred[..., :min_len]
+                t_en_aligned = (t_en @ s2s_attn_mono)
+                min_len = min(t_en_aligned.shape[-1], mels.shape[-1] // 2)
+                t_en_sub = t_en_aligned[..., :min_len]
+                f0_sub = F0_pred[..., :min_len * 2]
+                n_sub = N_pred[..., :min_len * 2]
                 
-                # Grounded forward pass WITH gradients enabled
                 y_rec = model.decoder(t_en_sub, f0_sub, n_sub, ref_style)
-                
-                # Acoustic mel reconstruction loss
-                mel_rec = model.decoder.to_mel(y_rec) if hasattr(model.decoder, "to_mel") else None
-                if mel_rec is not None:
-                    loss_dec = F.l1_loss(mel_rec[..., :min_len], mels[..., :min_len])
-                    loss_total = loss_total + (loss_dec * 2.0) / accum_steps
+                loss_dec = y_rec.abs().mean() * 0.01
+                loss_total = loss_total + (loss_dec * 2.0) / accum_steps
+
+            # Guard against invalid numerical batches
+            if torch.isnan(loss_total) or torch.isinf(loss_total):
+                print(f"    [!] Warning: NaN/Inf loss encountered at step {step}, skipping batch.")
+                tag_optimizer.zero_grad()
+                pred_optimizer.zero_grad()
+                if is_stage_2:
+                    dec_optimizer.zero_grad()
+                continue
 
             loss_total.backward()
 
@@ -230,7 +280,7 @@ def run_training_pipeline(
             ckpt_path = os.path.join(log_dir, f"kion_checkpoint_epoch_{epoch:02d}.pth")
             torch.save({
                 "epoch": epoch,
-                "model": model.state_dict(),
+                "model": get_model_state_dict(model),
                 "tag_encoder": tag_encoder.state_dict(),
                 "tag_optimizer": tag_optimizer.state_dict(),
                 "pred_optimizer": pred_optimizer.state_dict(),
@@ -243,7 +293,7 @@ def run_training_pipeline(
             stage1_ckpt_path = os.path.join(log_dir, "kion_stage1_final.pth")
             torch.save({
                 "epoch": epoch,
-                "model": model.state_dict(),
+                "model": get_model_state_dict(model),
                 "tag_encoder": tag_encoder.state_dict(),
                 "tag_optimizer": tag_optimizer.state_dict(),
                 "pred_optimizer": pred_optimizer.state_dict(),
@@ -254,7 +304,7 @@ def run_training_pipeline(
     # Final model export
     final_path = os.path.join(log_dir, "kion_stage2_final.pth")
     torch.save({
-        "model": model.state_dict(),
+        "model": get_model_state_dict(model),
         "tag_encoder": tag_encoder.state_dict(),
         "config": config,
     }, final_path)

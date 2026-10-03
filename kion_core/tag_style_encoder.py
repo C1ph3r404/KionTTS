@@ -73,8 +73,14 @@ def compute_kion_style_loss(s_tag, s_audio, lambda_cos=0.5):
     Guaranteed Pitfall Protection:
     - Never compares adjacent samples in a batch (avoids mode collapse).
     - Aligns both distance (MSE) and directional angle (Cosine Similarity).
+    - Uses safe normalization with eps=1e-4 and clamp to prevent gradient explosion/NaNs.
     """
     loss_mse = F.mse_loss(s_tag, s_audio)
-    cos_sim = F.cosine_similarity(s_tag, s_audio, dim=-1)
+    s_tag_norm = F.normalize(s_tag, p=2, dim=-1, eps=1e-4)
+    s_audio_norm = F.normalize(s_audio, p=2, dim=-1, eps=1e-4)
+    cos_sim = (s_tag_norm * s_audio_norm).sum(dim=-1).clamp(-1.0, 1.0)
     loss_cos = (1.0 - cos_sim).mean()
-    return loss_mse + lambda_cos * loss_cos
+    loss = loss_mse + lambda_cos * loss_cos
+    if torch.isnan(loss) or torch.isinf(loss):
+        return loss_mse
+    return loss

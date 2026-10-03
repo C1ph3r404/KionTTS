@@ -50,6 +50,12 @@ def parse_inline_prompt(prompt: str):
     return clean_text, tag_vector
 
 
+def length_to_mask(lengths):
+    mask = torch.arange(lengths.max(), device=lengths.device).unsqueeze(0).expand(lengths.shape[0], -1)
+    mask = torch.gt(mask + 1, lengths.unsqueeze(1))
+    return mask
+
+
 class KionSynthesizer:
     def __init__(self, model, tag_encoder, phonemizer_fn=None, device="cuda"):
         self.model = model
@@ -64,11 +70,19 @@ class KionSynthesizer:
         elif hasattr(self.model, "eval"):
             self.model.eval()
 
-        self.tag_encoder.eval()
+        if hasattr(self.tag_encoder, "eval"):
+            self.tag_encoder.eval()
 
     def text_to_tokens(self, text: str):
         if self.phonemizer_fn is not None:
-            ps = self.phonemizer_fn(text)
+            try:
+                ps = self.phonemizer_fn([text])
+                if isinstance(ps, (list, tuple)):
+                    ps = ps[0]
+            except Exception:
+                ps = self.phonemizer_fn(text)
+                if isinstance(ps, (list, tuple)):
+                    ps = ps[0]
         else:
             ps = text
 
@@ -101,7 +115,7 @@ class KionSynthesizer:
 
         # 2. Text Encoding
         input_lengths = torch.LongTensor([tokens.shape[-1]]).to(self.device)
-        text_mask = torch.arange(tokens.shape[-1]).unsqueeze(0).to(self.device) < input_lengths.unsqueeze(1)
+        text_mask = length_to_mask(input_lengths)
 
         t_en = self.model.text_encoder(tokens, input_lengths, text_mask)
         bert_dur = self.model.bert(tokens, attention_mask=(~text_mask).int())
