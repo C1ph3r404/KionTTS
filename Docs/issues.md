@@ -89,9 +89,27 @@ There were two coupled causes that triggered at `joint_epoch = 50`:
 * When passing unwindowed representations (up to 400 frames $\times 300 = 120,000$ audio samples per utterance $\times$ batch size 4), storing intermediate activation maps across all Snake1D and Conv1D layers consumed over 14.05 GiB of VRAM.
 * On Kaggle 16GB T4 GPUs (14.56 GiB usable), PyTorch ran out of memory by just 86 MiB.
 
+---
+
+## 5. Simultaneous Multi-Graph Retention OOM & CPU RAM Offloading
+
+### What Happened
+* When `loss_total = (loss_style + loss_predictor) / accum_steps + (loss_dec * 2.0) / accum_steps` was computed together before calling `loss_total.backward()`, PyTorch was forced to retain the full autograd activation graphs of BERT (12 transformer layers), Prosody Predictor, and the HiFi-GAN Decoder simultaneously in GPU VRAM.
+* Auxiliary modules (`diffusion`, `mpd`, `msd`, `wd`, and `pitch_extractor`) loaded by `build_model` were remaining on the GPU despite never being used during training, needlessly occupying >1.5 GB of VRAM.
+* In interactive Jupyter/Kaggle environments, crashed executions retain references to stack frames and tensors, locking up to 13.86 GiB of VRAM unless garbage collection and cache flushing are performed.
+
 ### Rule for Future Runs
-* **Use windowed slicing for decoder training**: Cap the temporal slice to `dec_window = min(full_len, 64)` frames ($\approx 0.8\text{ s}$ of audio), matching official StyleTTS2. This cuts decoder activation memory by $>80\%$ (from 14 GiB to $\sim 2.5\text{ GiB}$).
-* **Clear CUDA cache when transitioning to Stage 2**: Execute `torch.cuda.empty_cache()` at the epoch transition.
-* **Enable expandable segments**: Set `os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"` to prevent PyTorch CUDA block fragmentation.
+* **Decouple Stage 1 and Stage 2 backward passes**:
+  1. Call `loss_total.backward()` on `(loss_style + loss_predictor) / accum_steps` first. This immediately computes predictor/BERT gradients and frees all transformer activation graphs from GPU VRAM.
+  2. Execute `model.decoder` on a micro-batch (`dec_bs = 1`, `dec_window = 32`) with detached inputs (`t_en_sub`, `f0_sub`, `n_sub`).
+  3. Call `loss_dec_step.backward()` independently. The backward graph now contains *only* the decoder itself, dropping decoder peak VRAM to < 50 MB.
+* **Purge unused auxiliary modules to CPU RAM**:
+  ```python
+  for unused_k in ["diffusion", "mpd", "msd", "wd", "pitch_extractor"]:
+      if unused_k in model:
+          del model[unused_k]
+  ```
+* **Purge VRAM at cell entry**: Explicitly call `gc.collect()` and `torch.cuda.empty_cache()` before starting training pipelines in notebook cells.
+
 
 

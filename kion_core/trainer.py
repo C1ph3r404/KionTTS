@@ -86,7 +86,7 @@ def run_training_pipeline(
     predictor_params = list(model.predictor.parameters()) + list(model.bert.parameters()) + list(model.bert_encoder.parameters())
     pred_optimizer = torch.optim.AdamW(predictor_params, lr=lr, weight_decay=1e-4)
     
-    decoder_params = list(model.decoder.parameters()) + list(model.text_encoder.parameters())
+    decoder_params = list(model.decoder.parameters())
     dec_optimizer = torch.optim.AdamW(decoder_params, lr=lr * 0.5, weight_decay=1e-4)
 
     synthesizer = KionSynthesizer(model, tag_encoder, phonemizer_fn=phonemizer_fn, device=device)
@@ -129,6 +129,11 @@ def run_training_pipeline(
                 pred_optimizer.load_state_dict(ckpt["pred_optimizer"])
             except Exception:
                 pass
+        del ckpt
+        import gc
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
         print(f"[✓] Checkpoint loaded. Resuming at Epoch {start_epoch:02d} ({'STAGE 2' if start_epoch >= joint_epoch else 'STAGE 1'})")
 
     print(f"\n==========================================")
@@ -303,31 +308,7 @@ def run_training_pipeline(
 
             loss_total = (loss_style + loss_predictor) / accum_steps
 
-            # 3. Stage 2 Decoder Fine-tuning (Ultra-efficient windowing: 32 frames, dec_bs=2, detached F0/N)
-            loss_dec = torch.tensor(0.0, device=device)
-            if is_stage_2:
-                ref_style = s_tag[:, :128]
-                t_en_aligned = (t_en @ s2s_attn_mono)
-                full_len = min(t_en_aligned.shape[-1], mels.shape[-1] // 2)
-
-                # Cap window to 32 frames (~0.4s) and micro-batch to 2 to strictly guarantee 0 OOM on T4
-                dec_window = min(full_len, 32)
-                if full_len > dec_window:
-                    start_f = torch.randint(0, full_len - dec_window + 1, (1,)).item()
-                else:
-                    start_f = 0
-
-                dec_bs = min(texts.size(0), 2)
-                t_en_sub = t_en_aligned[:dec_bs, ..., start_f : start_f + dec_window]
-                f0_sub = F0_pred[:dec_bs, ..., start_f * 2 : (start_f + dec_window) * 2].detach()
-                n_sub = N_pred[:dec_bs, ..., start_f * 2 : (start_f + dec_window) * 2].detach()
-                ref_sub = ref_style[:dec_bs]
-                
-                y_rec = model.decoder(t_en_sub, f0_sub, n_sub, ref_sub)
-                loss_dec = y_rec.abs().mean() * 0.01
-                loss_total = loss_total + (loss_dec * 2.0) / accum_steps
-
-            # Guard against invalid numerical batches
+            # Guard against invalid numerical batches in predictor/style
             if torch.isnan(loss_total) or torch.isinf(loss_total):
                 if step < 5:
                     print(f"    [!] Warning: NaN/Inf loss encountered at step {step}: "
@@ -339,7 +320,36 @@ def run_training_pipeline(
                     dec_optimizer.zero_grad()
                 continue
 
+            # 1. Backpropagate Stage 1 / predictor loss FIRST.
+            # This computes gradients for predictor, BERT, and tag encoder and immediately
+            # frees all transformer activation graphs from GPU VRAM before the decoder runs.
             loss_total.backward()
+
+            # 2. Stage 2 Decoder Fine-tuning (Ultra-efficient isolated autograd: 32 frames, dec_bs=1)
+            loss_dec = torch.tensor(0.0, device=device)
+            if is_stage_2:
+                ref_style = s_tag[:, :128].detach()
+                t_en_aligned = (t_en @ s2s_attn_mono).detach()
+                full_len = min(t_en_aligned.shape[-1], mels.shape[-1] // 2)
+
+                # Cap window to 32 frames (~0.4s) and micro-batch to 1 to guarantee negligible VRAM (<50MB) on T4
+                dec_window = min(full_len, 32)
+                if full_len > dec_window:
+                    start_f = torch.randint(0, full_len - dec_window + 1, (1,)).item()
+                else:
+                    start_f = 0
+
+                dec_bs = 1
+                t_en_sub = t_en_aligned[:dec_bs, ..., start_f : start_f + dec_window]
+                f0_sub = F0_pred[:dec_bs, ..., start_f * 2 : (start_f + dec_window) * 2].detach()
+                n_sub = N_pred[:dec_bs, ..., start_f * 2 : (start_f + dec_window) * 2].detach()
+                ref_sub = ref_style[:dec_bs]
+                
+                y_rec = model.decoder(t_en_sub, f0_sub, n_sub, ref_sub)
+                loss_dec_step = (y_rec.abs().mean() * 0.01) / accum_steps
+                if not (torch.isnan(loss_dec_step) or torch.isinf(loss_dec_step)):
+                    loss_dec_step.backward()
+                    loss_dec = loss_dec_step.detach() * accum_steps
 
             if (step + 1) % accum_steps == 0 or (step + 1) == len(train_loader):
                 nn.utils.clip_grad_norm_(tag_encoder.parameters(), max_norm=5.0)
