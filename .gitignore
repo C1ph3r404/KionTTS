@@ -1,0 +1,45 @@
+# Byte-compiled / optimized files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# PyTorch checkpoints and model weights
+*.pth
+*.pt
+*.t7
+checkpoints/
+Models/
+kiontts_release/
+
+# Audio and generated media
+*.wav
+*.mp3
+*.flac
+eval_samples/
+
+# Datasets & large archives
+DataSet/data/
+DataSet/sample_kion/
+DataSet/*.tar
+DataSet/*.tar.gz
+DataSet/*.zip
+*.tar
+*.tar.gz
+*.zip
+
+# Official unmodified StyleTTS2
+StyleTTS2/
+
+# Jupyter / IPython
+.ipynb_checkpoints/
+*/.ipynb_checkpoints/*
+
+# Logs & TensorBoard
+*.log
+runs/
+tensorboard/
+
+# Virtual environments & OS files
+.venv/
+venv/
+.DS_Store
