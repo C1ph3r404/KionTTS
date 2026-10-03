@@ -303,25 +303,27 @@ def run_training_pipeline(
 
             loss_total = (loss_style + loss_predictor) / accum_steps
 
-            # 3. Stage 2 Decoder Fine-tuning (Windowed to prevent T4 CUDA OOM)
+            # 3. Stage 2 Decoder Fine-tuning (Ultra-efficient windowing: 32 frames, dec_bs=2, detached F0/N)
             loss_dec = torch.tensor(0.0, device=device)
             if is_stage_2:
                 ref_style = s_tag[:, :128]
                 t_en_aligned = (t_en @ s2s_attn_mono)
                 full_len = min(t_en_aligned.shape[-1], mels.shape[-1] // 2)
 
-                # Cap window to 64 frames (approx 0.8s) like official StyleTTS2 to prevent OOM
-                dec_window = min(full_len, 64)
+                # Cap window to 32 frames (~0.4s) and micro-batch to 2 to strictly guarantee 0 OOM on T4
+                dec_window = min(full_len, 32)
                 if full_len > dec_window:
                     start_f = torch.randint(0, full_len - dec_window + 1, (1,)).item()
                 else:
                     start_f = 0
 
-                t_en_sub = t_en_aligned[..., start_f : start_f + dec_window]
-                f0_sub = F0_pred[..., start_f * 2 : (start_f + dec_window) * 2]
-                n_sub = N_pred[..., start_f * 2 : (start_f + dec_window) * 2]
+                dec_bs = min(texts.size(0), 2)
+                t_en_sub = t_en_aligned[:dec_bs, ..., start_f : start_f + dec_window]
+                f0_sub = F0_pred[:dec_bs, ..., start_f * 2 : (start_f + dec_window) * 2].detach()
+                n_sub = N_pred[:dec_bs, ..., start_f * 2 : (start_f + dec_window) * 2].detach()
+                ref_sub = ref_style[:dec_bs]
                 
-                y_rec = model.decoder(t_en_sub, f0_sub, n_sub, ref_style)
+                y_rec = model.decoder(t_en_sub, f0_sub, n_sub, ref_sub)
                 loss_dec = y_rec.abs().mean() * 0.01
                 loss_total = loss_total + (loss_dec * 2.0) / accum_steps
 
