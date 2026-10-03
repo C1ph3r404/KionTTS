@@ -91,8 +91,23 @@ def run_training_pipeline(
 
     synthesizer = KionSynthesizer(model, tag_encoder, phonemizer_fn=phonemizer_fn, device=device)
 
-    # Check for resume checkpoint (e.g. kion_stage1_final.pth)
+    # Check for resume checkpoint: auto-discover the latest checkpoint in log_dir if not explicitly set
     resume_path = config.get("resume_checkpoint", None)
+    if resume_path is None and os.path.exists(log_dir):
+        epoch_ckpts = []
+        for f in os.listdir(log_dir):
+            if f.startswith("kion_checkpoint_epoch_") and f.endswith(".pth"):
+                try:
+                    ep_num = int(f.replace("kion_checkpoint_epoch_", "").replace(".pth", ""))
+                    epoch_ckpts.append((ep_num, os.path.join(log_dir, f)))
+                except ValueError:
+                    pass
+        if epoch_ckpts:
+            epoch_ckpts.sort(key=lambda x: x[0], reverse=True)
+            resume_path = epoch_ckpts[0][1]
+        elif os.path.exists(os.path.join(log_dir, "kion_stage1_final.pth")):
+            resume_path = os.path.join(log_dir, "kion_stage1_final.pth")
+
     if resume_path and os.path.exists(resume_path):
         print(f"[*] Resuming training from checkpoint: {resume_path}")
         ckpt = torch.load(resume_path, map_location="cpu")
