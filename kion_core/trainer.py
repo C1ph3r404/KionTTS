@@ -75,6 +75,7 @@ def run_training_pipeline(
 
     epochs = config.get("epochs", 6)
     joint_epoch = config.get("joint_epoch", 3)
+    start_epoch = config.get("start_epoch", 0)
     lr = config.get("lr", 1e-4)
     accum_steps = config.get("accum_steps", 2)
     save_freq = config.get("save_freq", 1)
@@ -90,8 +91,33 @@ def run_training_pipeline(
 
     synthesizer = KionSynthesizer(model, tag_encoder, phonemizer_fn=phonemizer_fn, device=device)
 
+    # Check for resume checkpoint (e.g. kion_stage1_final.pth)
+    resume_path = config.get("resume_checkpoint", None)
+    if resume_path and os.path.exists(resume_path):
+        print(f"[*] Resuming training from checkpoint: {resume_path}")
+        ckpt = torch.load(resume_path, map_location="cpu")
+        if "epoch" in ckpt:
+            start_epoch = max(start_epoch, ckpt["epoch"] + 1)
+        if "model" in ckpt:
+            for k in model:
+                if k in ckpt["model"]:
+                    model[k].load_state_dict(ckpt["model"][k])
+        if "tag_encoder" in ckpt:
+            tag_encoder.load_state_dict(ckpt["tag_encoder"])
+        if "tag_optimizer" in ckpt:
+            try:
+                tag_optimizer.load_state_dict(ckpt["tag_optimizer"])
+            except Exception:
+                pass
+        if "pred_optimizer" in ckpt:
+            try:
+                pred_optimizer.load_state_dict(ckpt["pred_optimizer"])
+            except Exception:
+                pass
+        print(f"[✓] Checkpoint loaded. Resuming at Epoch {start_epoch:02d} ({'STAGE 2' if start_epoch >= joint_epoch else 'STAGE 1'})")
+
     print(f"\n==========================================")
-    print(f"[*] Starting KionTTS Training ({epochs} epochs total)")
+    print(f"[*] Starting KionTTS Training (Epochs {start_epoch} to {epochs - 1})")
     print(f"[*] Stage 1 (Predictor & Style Alignment): Epochs 0 to {joint_epoch - 1}")
     print(f"[*] Stage 2 (Joint Acoustic Fine-tuning): Epochs {joint_epoch} to {epochs - 1}")
     print(f"[*] Batch size per step: {train_loader.batch_size} | Gradient accum steps: {accum_steps}")
@@ -129,7 +155,7 @@ def run_training_pipeline(
             if torch.isnan(p).any():
                 torch.nn.init.normal_(p, mean=0.0, std=0.02)
 
-    for epoch in range(epochs):
+    for epoch in range(start_epoch, epochs):
         epoch_start = time.time()
         is_stage_2 = (epoch >= joint_epoch)
 
