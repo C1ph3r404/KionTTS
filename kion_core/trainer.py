@@ -97,6 +97,24 @@ def run_training_pipeline(
     print(f"[*] Batch size per step: {train_loader.batch_size} | Gradient accum steps: {accum_steps}")
     print(f"==========================================\n")
 
+    # Ensure style_encoder, predictor_encoder, text_aligner, and pitch_extractor are in eval mode & frozen
+    for m_name in ["style_encoder", "predictor_encoder", "text_aligner", "pitch_extractor"]:
+        if hasattr(model, m_name) and getattr(model, m_name) is not None:
+            mod = getattr(model, m_name)
+            mod.eval()
+            for p in mod.parameters():
+                p.requires_grad = False
+
+    # Check and sync predictor_encoder from style_encoder if uninitialized or corrupted
+    if hasattr(model, "predictor_encoder") and hasattr(model, "style_encoder"):
+        pred_enc_norm = sum(p.norm().item() for p in model.predictor_encoder.parameters() if p.numel() > 0)
+        if pred_enc_norm < 1e-4 or torch.isnan(torch.tensor(pred_enc_norm)) or pred_enc_norm > 1e6:
+            print("[*] Syncing predictor_encoder weights from style_encoder...")
+            model.predictor_encoder.load_state_dict(model.style_encoder.state_dict())
+            for p in model.predictor_encoder.parameters():
+                p.requires_grad = False
+            model.predictor_encoder.eval()
+
     # Check if model or tag_encoder already has NaN parameters from previous aborted run
     nan_in_tag = any(torch.isnan(p).any() for p in tag_encoder.parameters())
     nan_in_pred = any(torch.isnan(p).any() for p in model.predictor.parameters())
@@ -120,10 +138,20 @@ def run_training_pipeline(
         model.bert.train()
         model.bert_encoder.train()
 
+        # Encoders must remain in eval mode so spectral_norm doesn't update buffers under no_grad
+        model.style_encoder.eval()
+        model.predictor_encoder.eval()
+        if hasattr(model, "text_aligner"):
+            model.text_aligner.eval()
+        if hasattr(model, "pitch_extractor"):
+            model.pitch_extractor.eval()
+
         if is_stage_2:
             model.decoder.train()
             model.text_encoder.train()
             print(f"\n>>> [EPOCH {epoch:02d}] STAGE 2 ACTIVE: Joint acoustic fine-tuning (Decoder trainable with true gradients)")
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
         else:
             model.decoder.eval()
             model.text_encoder.eval()
@@ -163,6 +191,8 @@ def run_training_pipeline(
                     ss.append(model.predictor_encoder(mel_in))
                 s_ref = torch.cat(gs, dim=0).detach()   # (B, 128) acoustic
                 s_dur = torch.cat(ss, dim=0).detach()   # (B, 128) prosodic
+                s_ref = torch.nan_to_num(s_ref, nan=0.0).clamp(-10.0, 10.0)
+                s_dur = torch.nan_to_num(s_dur, nan=0.0).clamp(-10.0, 10.0)
                 s_audio = torch.cat([s_ref, s_dur], dim=-1) # (B, 256)
 
             # 1. Kion Tag Style Encoder forward
@@ -203,28 +233,52 @@ def run_training_pipeline(
             # Use 50% ground truth s_dur, 50% tag predicted s_tag[:, 128:]
             use_tag_style = (step % 2 == 0)
             s_pred_cond = s_tag[:, 128:] if use_tag_style else s_dur
+            s_pred_cond = torch.nan_to_num(s_pred_cond, nan=0.0).clamp(-10.0, 10.0)
 
             d, p = model.predictor(d_en, s_pred_cond, input_lengths, s2s_attn_mono, text_mask)
-            duration_pred = torch.sigmoid(d).sum(dim=-1)
-            loss_dur = F.mse_loss(duration_pred, d_gt)
+            
+            # Duration L1 loss: computed strictly on valid non-boundary phonemes like StyleTTS2
+            loss_dur = torch.tensor(0.0, device=device)
+            valid_dur_count = 0
+            for b in range(texts.size(0)):
+                tl = input_lengths[b].item()
+                if tl > 2:
+                    p_dur = torch.sigmoid(d[b, 1:tl-1]).sum(dim=-1)
+                    gt_dur = d_gt[b, 1:tl-1]
+                    loss_dur = loss_dur + F.l1_loss(p_dur, gt_dur)
+                    valid_dur_count += 1
+            if valid_dur_count > 0:
+                loss_dur = loss_dur / valid_dur_count
+            else:
+                loss_dur = F.l1_loss(torch.sigmoid(d).sum(dim=-1), d_gt)
 
             # Predictor F0 & Energy loss
             F0_pred, N_pred = model.predictor.F0Ntrain(p, s_pred_cond)
+            F0_pred = torch.nan_to_num(F0_pred, nan=0.0).clamp(-50.0, 50.0)
+            N_pred = torch.nan_to_num(N_pred, nan=0.0).clamp(-50.0, 50.0)
             loss_f0 = F0_pred.abs().mean() * 0.05
             loss_n = N_pred.abs().mean() * 0.05
             loss_predictor = loss_dur + loss_f0 + loss_n
 
             loss_total = (loss_style + loss_predictor) / accum_steps
 
-            # 3. Stage 2 Decoder Fine-tuning
+            # 3. Stage 2 Decoder Fine-tuning (Windowed to prevent T4 CUDA OOM)
             loss_dec = torch.tensor(0.0, device=device)
             if is_stage_2:
                 ref_style = s_tag[:, :128]
                 t_en_aligned = (t_en @ s2s_attn_mono)
-                min_len = min(t_en_aligned.shape[-1], mels.shape[-1] // 2)
-                t_en_sub = t_en_aligned[..., :min_len]
-                f0_sub = F0_pred[..., :min_len * 2]
-                n_sub = N_pred[..., :min_len * 2]
+                full_len = min(t_en_aligned.shape[-1], mels.shape[-1] // 2)
+
+                # Cap window to 64 frames (approx 0.8s) like official StyleTTS2 to prevent OOM
+                dec_window = min(full_len, 64)
+                if full_len > dec_window:
+                    start_f = torch.randint(0, full_len - dec_window + 1, (1,)).item()
+                else:
+                    start_f = 0
+
+                t_en_sub = t_en_aligned[..., start_f : start_f + dec_window]
+                f0_sub = F0_pred[..., start_f * 2 : (start_f + dec_window) * 2]
+                n_sub = N_pred[..., start_f * 2 : (start_f + dec_window) * 2]
                 
                 y_rec = model.decoder(t_en_sub, f0_sub, n_sub, ref_style)
                 loss_dec = y_rec.abs().mean() * 0.01

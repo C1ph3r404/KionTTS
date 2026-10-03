@@ -75,12 +75,15 @@ def compute_kion_style_loss(s_tag, s_audio, lambda_cos=0.5):
     - Aligns both distance (MSE) and directional angle (Cosine Similarity).
     - Uses safe normalization with eps=1e-4 and clamp to prevent gradient explosion/NaNs.
     """
-    loss_mse = F.mse_loss(s_tag, s_audio)
-    s_tag_norm = F.normalize(s_tag, p=2, dim=-1, eps=1e-4)
-    s_audio_norm = F.normalize(s_audio, p=2, dim=-1, eps=1e-4)
+    s_tag_safe = torch.nan_to_num(s_tag, nan=0.0).clamp(-10.0, 10.0)
+    s_audio_safe = torch.nan_to_num(s_audio, nan=0.0).clamp(-10.0, 10.0)
+
+    loss_mse = F.mse_loss(s_tag_safe, s_audio_safe)
+    s_tag_norm = F.normalize(s_tag_safe, p=2, dim=-1, eps=1e-4)
+    s_audio_norm = F.normalize(s_audio_safe, p=2, dim=-1, eps=1e-4)
     cos_sim = (s_tag_norm * s_audio_norm).sum(dim=-1).clamp(-1.0, 1.0)
     loss_cos = (1.0 - cos_sim).mean()
     loss = loss_mse + lambda_cos * loss_cos
     if torch.isnan(loss) or torch.isinf(loss):
-        return loss_mse
+        return torch.tensor(0.0, device=s_tag.device, requires_grad=True)
     return loss
