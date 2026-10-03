@@ -97,6 +97,20 @@ def run_training_pipeline(
     print(f"[*] Batch size per step: {train_loader.batch_size} | Gradient accum steps: {accum_steps}")
     print(f"==========================================\n")
 
+    # Check if model or tag_encoder already has NaN parameters from previous aborted run
+    nan_in_tag = any(torch.isnan(p).any() for p in tag_encoder.parameters())
+    nan_in_pred = any(torch.isnan(p).any() for p in model.predictor.parameters())
+    if nan_in_tag:
+        print("[!] Warning: Detected NaN weights in tag_encoder from previous run. Resetting tag_encoder parameters...")
+        for p in tag_encoder.parameters():
+            if torch.isnan(p).any():
+                torch.nn.init.normal_(p, mean=0.0, std=0.02)
+    if nan_in_pred:
+        print("[!] Warning: Detected NaN weights in model.predictor from previous run. Re-initializing predictor layers...")
+        for p in model.predictor.parameters():
+            if torch.isnan(p).any():
+                torch.nn.init.normal_(p, mean=0.0, std=0.02)
+
     for epoch in range(epochs):
         epoch_start = time.time()
         is_stage_2 = (epoch >= joint_epoch)
@@ -141,8 +155,9 @@ def run_training_pipeline(
                 for bib in range(len(mel_lengths)):
                     mel_len = int(mel_lengths[bib].item())
                     mel_slice = mels[bib, :, :mel_len]
-                    if mel_slice.shape[-1] < 32:
-                        mel_slice = F.pad(mel_slice, (0, 32 - mel_slice.shape[-1]), mode='reflect')
+                    if mel_slice.shape[-1] < 128:
+                        repeats = (128 // max(1, mel_slice.shape[-1])) + 1
+                        mel_slice = mel_slice.repeat(1, repeats)[:, :128]
                     mel_in = mel_slice.unsqueeze(0).unsqueeze(1)
                     gs.append(model.style_encoder(mel_in))
                     ss.append(model.predictor_encoder(mel_in))
@@ -217,7 +232,10 @@ def run_training_pipeline(
 
             # Guard against invalid numerical batches
             if torch.isnan(loss_total) or torch.isinf(loss_total):
-                print(f"    [!] Warning: NaN/Inf loss encountered at step {step}, skipping batch.")
+                if step < 5:
+                    print(f"    [!] Warning: NaN/Inf loss encountered at step {step}: "
+                          f"style={loss_style.item():.4f}, dur={loss_dur.item():.4f}, "
+                          f"f0={loss_f0.item():.4f}, n={loss_n.item():.4f}")
                 tag_optimizer.zero_grad()
                 pred_optimizer.zero_grad()
                 if is_stage_2:
