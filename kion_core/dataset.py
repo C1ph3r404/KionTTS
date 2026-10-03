@@ -77,6 +77,15 @@ class KionManifestDataset(Dataset):
     def __getitem__(self, idx):
         item = self.samples[idx]
         wav_full_path = osp.join(self.root_dir, item["wav_path"])
+        if not osp.exists(wav_full_path):
+            for candidate in [
+                osp.join(self.root_dir, "sample_kion", item["wav_path"]),
+                osp.join(self.root_dir, "wavs", osp.basename(item["wav_path"])),
+                osp.join(self.root_dir, osp.basename(item["wav_path"]))
+            ]:
+                if osp.exists(candidate):
+                    wav_full_path = candidate
+                    break
 
         # Load audio
         wave, sr = sf.read(wav_full_path)
