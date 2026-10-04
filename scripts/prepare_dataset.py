@@ -120,10 +120,34 @@ def build_ood_texts(output_path: str):
     print(f"[✓] OOD evaluation texts saved to: {output_path}")
 
 
+def climb_to_dataset_root(path: str) -> str:
+    """
+    If path points to a leaf batch or tier directory (e.g. batch_1063 or Tier3),
+    climb up the folder hierarchy until reaching the dataset root.
+    """
+    if not path or os.path.isfile(path):
+        return path
+
+    curr = os.path.abspath(path)
+    system_roots = {"/kaggle/input", "/kaggle", "/", os.path.expanduser("~")}
+    
+    while curr not in system_roots and os.path.dirname(curr) != curr:
+        base = os.path.basename(curr).lower()
+        parent = os.path.dirname(curr)
+        
+        # If current folder is a batch folder, tier folder, or specific split folder
+        if any(marker in base for marker in ["batch", "tier", "kiontts_dataset_"]):
+            curr = parent
+        else:
+            break
+
+    return curr
+
+
 def discover_dataset_source(explicit_path: Optional[str] = None) -> str:
-    """Auto-discovers the dataset source across Kaggle input, tar files, or directories."""
+    """Auto-discovers the dataset root source across Kaggle input, tar files, or directories."""
     if explicit_path and os.path.exists(explicit_path):
-        return explicit_path
+        return climb_to_dataset_root(explicit_path)
 
     # Candidate locations
     candidates = [
@@ -132,35 +156,62 @@ def discover_dataset_source(explicit_path: Optional[str] = None) -> str:
         "DataSet/data",
         "DataSet",
         # Kaggle input paths
+        "/kaggle/input/tts-dataset",
+        "/kaggle/input/tts_dataset",
         "/kaggle/input/kion-dataset",
         "/kaggle/input/kiontts",
         "/kaggle/input/kiontts-dataset",
+        "/kaggle/input/kion_dataset",
         "/kaggle/input/kion-dataset/kion_dataset.tar",
         "/kaggle/input/kiontts/DataSet/data/kion_dataset.tar",
     ]
 
     for cand in candidates:
         if os.path.exists(cand):
-            # Check if directory actually contains data
             if os.path.isdir(cand):
                 contents = os.listdir(cand)
                 if contents:
-                    return cand
+                    return climb_to_dataset_root(cand)
             else:
                 return cand
 
-    # Scan /kaggle/input recursively for any folder containing 'kion' or 'dataset'
+    # Scan /kaggle/input dynamically
     if os.path.exists("/kaggle/input"):
+        # 0. Check for pre-existing train_manifest.json (recursive)
+        manifest_matches = [
+            m for m in glob.glob("/kaggle/input/**/train_manifest.json", recursive=True)
+            if os.path.getsize(m) > 10
+        ]
+        if manifest_matches:
+            return os.path.dirname(manifest_matches[0])
+
+        # 1. Check for tar archive
+        tars = glob.glob("/kaggle/input/**/kion_dataset.tar", recursive=True) or \
+               glob.glob("/kaggle/input/**/*.tar", recursive=True)
+        if tars:
+            return tars[0]
+
+        # 2. Check for master split zips
+        master_zips = glob.glob("/kaggle/input/**/KionTTS_Dataset_*.zip", recursive=True)
+        if master_zips:
+            common_zip = os.path.commonpath(master_zips)
+            return common_zip if os.path.isdir(common_zip) else os.path.dirname(common_zip)
+
+        # 3. Check for extracted metadata.json files across batch directories
+        meta_files = glob.glob("/kaggle/input/**/metadata.json", recursive=True)
+        if meta_files:
+            common_root = os.path.commonpath(meta_files)
+            if os.path.isfile(common_root):
+                common_root = os.path.dirname(common_root)
+            return climb_to_dataset_root(common_root)
+
+        # 4. Fallback search by folder names
         for root, dirs, files in os.walk("/kaggle/input"):
-            if "kion_dataset.tar" in files:
-                return os.path.join(root, "kion_dataset.tar")
-            for f in files:
-                if f.endswith(".zip") and ("train" in f.lower() or "batch" in f.lower()):
-                    return root
             for d in dirs:
-                if "kion" in d.lower() or "dataset" in d.lower():
+                if any(k in d.lower() for k in ["tts", "kion", "dataset"]):
                     cand_dir = os.path.join(root, d)
-                    return cand_dir
+                    if os.path.isdir(cand_dir) and len(os.listdir(cand_dir)) > 0:
+                        return cand_dir
 
     raise FileNotFoundError("Could not auto-discover KionTTS dataset in workspace or /kaggle/input.")
 
@@ -181,6 +232,8 @@ def process_entries(
 
     added = 0
     for entry in meta_items:
+        if not isinstance(entry, dict):
+            continue
         if max_samples and len(manifest_records) >= max_samples:
             break
 
@@ -189,11 +242,16 @@ def process_entries(
             continue
 
         segs = entry.get("segments", [])
-        if segs and len(segs) == 1:
+        if segs and len(segs) == 1 and isinstance(segs[0], dict):
             seg = segs[0]
-            clean_text = clean_text_for_phonemizer(seg.get("text", ""))
-            emotions = seg.get("emotions", {})
-            styles = seg.get("styles", {})
+            clean_text = clean_text_for_phonemizer(seg.get("text", "") or entry.get("text", ""))
+            emotions = seg.get("emotions", {}) or entry.get("emotions", {})
+            styles = seg.get("styles", {}) or entry.get("styles", {})
+        elif segs and len(segs) > 1:
+            seg_text = " ".join(s.get("text", "") for s in segs if isinstance(s, dict))
+            clean_text = clean_text_for_phonemizer(entry.get("text", "") or seg_text)
+            emotions = entry.get("emotions", {}) or (segs[0].get("emotions", {}) if isinstance(segs[0], dict) else {})
+            styles = entry.get("styles", {}) or (segs[0].get("styles", {}) if isinstance(segs[0], dict) else {})
         else:
             clean_text = clean_text_for_phonemizer(entry.get("text", ""))
             emotions = entry.get("emotions", {})
@@ -206,13 +264,20 @@ def process_entries(
         if not audio_src:
             continue
 
-        dest_wav_path = os.path.join(wav_dir, f"{uid}.wav")
+        clean_uid = uid[:-4] if uid.lower().endswith(".wav") else uid
+        dest_wav_path = os.path.join(wav_dir, f"{clean_uid}.wav")
 
         if isinstance(audio_src, (bytes, bytearray)):
             if not os.path.exists(dest_wav_path):
                 with open(dest_wav_path, "wb") as f_out:
                     f_out.write(audio_src)
         elif isinstance(audio_src, str):
+            # Clean up broken symlink if one exists from earlier aborted runs
+            if os.path.islink(dest_wav_path) and not os.path.exists(dest_wav_path):
+                try:
+                    os.unlink(dest_wav_path)
+                except Exception:
+                    pass
             # File already on disk (e.g. Kaggle uncompressed directory)
             if not os.path.exists(dest_wav_path) and not os.path.islink(dest_wav_path):
                 try:
@@ -227,19 +292,20 @@ def process_entries(
         phonemes = try_phonemize(clean_text, phonemizer_obj)
 
         record = {
-            "id": uid,
+            "id": clean_uid,
             "clean_text": clean_text,
             "phonemes": phonemes,
             "emotions": emotions,
             "styles": styles,
             "tag_vector": tag_vector,
-            "wav_path": f"wavs/{uid}.wav",
+            "wav_path": f"wavs/{clean_uid}.wav",
             "speaker": "kion",
         }
         manifest_records.append(record)
         seen_ids.add(uid)
+        seen_ids.add(clean_uid)
 
-        rel_wav_path = os.path.join("wavs", f"{uid}.wav")
+        rel_wav_path = os.path.join("wavs", f"{clean_uid}.wav")
         style_text_list.append(f"{rel_wav_path}|{phonemes}|0")
         added += 1
 
@@ -346,23 +412,56 @@ def prepare_kion_dataset(
     else:
         print(f"[*] Processing directory: {source_path}")
 
-        # Sub-case 2A: Check if manifests already exist in source directory
-        pre_train_manifest = os.path.join(source_path, "train_manifest.json")
-        if os.path.exists(pre_train_manifest):
+        # Sub-case 2A: Check if manifests already exist in source directory (root or recursively nested)
+        existing_train_manifests = [
+            m for m in glob.glob(os.path.join(source_path, "**", "train_manifest.json"), recursive=True)
+            if os.path.getsize(m) > 10
+        ]
+        if existing_train_manifests:
+            pre_train_manifest = existing_train_manifests[0]
+            manifest_dir = os.path.dirname(pre_train_manifest)
             print(f"[✓] Found pre-existing train_manifest.json in: {pre_train_manifest}")
             with open(pre_train_manifest, "r", encoding="utf-8") as f:
                 manifests["train"] = json.load(f)
-            pre_val_manifest = os.path.join(source_path, "val_manifest.json")
+
+            pre_val_manifest = os.path.join(manifest_dir, "val_manifest.json")
+            if not os.path.exists(pre_val_manifest):
+                val_matches = [
+                    m for m in glob.glob(os.path.join(source_path, "**", "val_manifest.json"), recursive=True)
+                    if os.path.getsize(m) > 10
+                ]
+                if val_matches:
+                    pre_val_manifest = val_matches[0]
+
             if os.path.exists(pre_val_manifest):
                 with open(pre_val_manifest, "r", encoding="utf-8") as f:
                     manifests["val"] = json.load(f)
 
-            src_wavs = os.path.join(source_path, "wavs")
-            if os.path.exists(src_wavs) and src_wavs != os.path.abspath(wav_dir):
+            # Locate wavs directory: check manifest_dir/wavs, source_path/wavs, or recursive wavs
+            src_wavs = None
+            for cand_w in [
+                os.path.join(manifest_dir, "wavs"),
+                os.path.join(source_path, "wavs"),
+                os.path.join(manifest_dir, "..", "wavs"),
+            ]:
+                if os.path.exists(cand_w) and os.path.isdir(cand_w):
+                    src_wavs = cand_w
+                    break
+            if not src_wavs:
+                wav_dirs = [d for d in glob.glob(os.path.join(source_path, "**", "wavs"), recursive=True) if os.path.isdir(d)]
+                if wav_dirs:
+                    src_wavs = wav_dirs[0]
+
+            if src_wavs and os.path.abspath(src_wavs) != os.path.abspath(wav_dir):
                 for w in os.listdir(src_wavs):
-                    if w.endswith(".wav"):
+                    if w.lower().endswith(".wav"):
                         s_f = os.path.join(src_wavs, w)
                         d_f = os.path.join(wav_dir, w)
+                        if os.path.islink(d_f) and not os.path.exists(d_f):
+                            try:
+                                os.unlink(d_f)
+                            except Exception:
+                                pass
                         if not os.path.exists(d_f):
                             try:
                                 os.symlink(os.path.abspath(s_f), d_f)
@@ -452,7 +551,14 @@ def prepare_kion_dataset(
         if loose_metas:
             print(f"    Found {len(loose_metas)} extracted metadata.json files on disk.")
             for meta_path in loose_metas:
-                split_key = "val" if "val" in meta_path.lower() else "train"
+                meta_lower = meta_path.lower()
+                if "train" in meta_lower:
+                    split_key = "train"
+                elif any(v in meta_lower for v in ["val", "eval", "test"]):
+                    split_key = "val"
+                else:
+                    split_key = "train"
+
                 if max_samples and len(manifests[split_key]) >= max_samples:
                     continue
 
@@ -462,21 +568,52 @@ def prepare_kion_dataset(
                 except Exception:
                     continue
 
+                if isinstance(meta_item, list):
+                    meta_entries = meta_item
+                elif isinstance(meta_item, dict):
+                    if "id" in meta_item or "text" in meta_item or "segments" in meta_item:
+                        meta_entries = [meta_item]
+                    elif any(k in meta_item for k in ["data", "utterances", "samples", "records"]):
+                        meta_entries = []
+                        for k in ["data", "utterances", "samples", "records"]:
+                            if k in meta_item and isinstance(meta_item[k], list):
+                                meta_entries = meta_item[k]
+                                break
+                    elif all(isinstance(v, dict) for v in meta_item.values()):
+                        meta_entries = []
+                        for k, v in meta_item.items():
+                            if isinstance(v, dict):
+                                if "id" not in v:
+                                    v["id"] = k
+                                meta_entries.append(v)
+                    else:
+                        meta_entries = [meta_item]
+                else:
+                    meta_entries = []
+
                 batch_dir = os.path.dirname(meta_path)
                 wavs_sub = os.path.join(batch_dir, "wavs")
 
                 def get_wav_fn(uid):
+                    clean_id = uid[:-4] if uid.lower().endswith(".wav") else uid
                     for cand in [
-                        os.path.join(wavs_sub, f"{uid}.wav"),
-                        os.path.join(batch_dir, f"{uid}.wav"),
-                        os.path.join(source_path, "wavs", f"{uid}.wav"),
+                        os.path.join(wavs_sub, f"{clean_id}.wav"),
+                        os.path.join(batch_dir, f"{clean_id}.wav"),
+                        os.path.join(wavs_sub, f"{clean_id}.WAV"),
+                        os.path.join(batch_dir, f"{clean_id}.WAV"),
+                        os.path.join(wavs_sub, f"{clean_id}.flac"),
+                        os.path.join(batch_dir, f"{clean_id}.flac"),
+                        os.path.join(source_path, "wavs", f"{clean_id}.wav"),
+                        os.path.join(os.path.dirname(batch_dir), "wavs", f"{clean_id}.wav"),
+                        os.path.join(os.path.dirname(batch_dir), f"{clean_id}.wav"),
+                        uid,
                     ]:
                         if os.path.exists(cand):
                             return cand
                     return None
 
                 process_entries(
-                    meta_items=meta_item,
+                    meta_items=meta_entries,
                     get_wav_bytes_or_path_fn=get_wav_fn,
                     wav_dir=wav_dir,
                     manifest_records=manifests[split_key],
@@ -493,6 +630,18 @@ def prepare_kion_dataset(
         manifests["train"] = manifests["train"][:-val_count]
         style_text_lists["val"] = style_text_lists["train"][-val_count:]
         style_text_lists["train"] = style_text_lists["train"][:-val_count]
+
+    # If train split is empty, take 90% from val for train (or mirror if 1 sample)
+    if len(manifests["train"]) == 0 and len(manifests["val"]) > 0:
+        if len(manifests["val"]) == 1:
+            manifests["train"] = list(manifests["val"])
+            style_text_lists["train"] = list(style_text_lists["val"])
+        else:
+            train_count = max(1, int(len(manifests["val"]) * 0.9))
+            manifests["train"] = manifests["val"][:train_count]
+            manifests["val"] = manifests["val"][train_count:]
+            style_text_lists["train"] = style_text_lists["val"][:train_count]
+            style_text_lists["val"] = style_text_lists["val"][train_count:]
 
     # Save manifests
     train_json_path = os.path.join(output_dir, "train_manifest.json")
