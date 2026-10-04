@@ -218,6 +218,10 @@ class KionProductionTrainer:
                 for p in self.model[k].parameters():
                     p.requires_grad = False
 
+        if start_epoch >= epochs:
+            print(f"[✓] Stage 1 target epochs already achieved ({start_epoch}/{epochs}). Skipping Stage 1 training.")
+            return
+
         best_loss = float("inf")
         global_step = start_step if start_step > 0 else start_epoch * len(train_loader)
 
@@ -242,7 +246,17 @@ class KionProductionTrainer:
             if self.opt_bert:
                 self.opt_bert.zero_grad()
 
+            batches_in_epoch = len(train_loader)
+            skip_steps = 0
+            if epoch == start_epoch and start_step > 0:
+                skip_steps = start_step % batches_in_epoch
+                if skip_steps > 0:
+                    print(f"[*] Fast-forwarding dataloader: Resuming at step {global_step} (skipping first {skip_steps}/{batches_in_epoch} batches of epoch {epoch+1})...")
+
             for step, batch in enumerate(train_loader):
+                if step < skip_steps:
+                    continue
+
                 waves, texts, input_lengths, mels, output_lengths, ref_mels, tag_vectors, paths = batch
 
                 texts = texts.to(self.device)
@@ -444,6 +458,10 @@ class KionProductionTrainer:
             for p in list(self.model["mpd"].parameters()) + list(self.model["msd"].parameters()):
                 p.requires_grad = True
 
+        if start_epoch >= epochs:
+            print(f"[✓] Stage 2 target epochs already achieved ({start_epoch}/{epochs}). Skipping Stage 2 training.")
+            return
+
         best_loss = float("inf")
         global_step = start_step if start_step > 0 else start_epoch * len(train_loader)
 
@@ -458,7 +476,17 @@ class KionProductionTrainer:
             total_disc_loss = 0.0
             num_batches = 0
 
+            batches_in_epoch = len(train_loader)
+            skip_steps = 0
+            if epoch == start_epoch and start_step > 0:
+                skip_steps = start_step % batches_in_epoch
+                if skip_steps > 0:
+                    print(f"[*] Fast-forwarding dataloader: Resuming at step {global_step} (skipping first {skip_steps}/{batches_in_epoch} batches of epoch {epoch+1})...")
+
             for step, batch in enumerate(train_loader):
+                if step < skip_steps:
+                    continue
+
                 waves, texts, input_lengths, mels, output_lengths, ref_mels, tag_vectors, paths = batch
 
                 texts = texts.to(self.device)

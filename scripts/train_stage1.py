@@ -104,6 +104,10 @@ def main():
         start_step = state_meta.get("step", 0)
         print(f"[✓] Resuming Stage 1 from epoch {start_epoch}, step {start_step}...")
 
+    if start_epoch >= args.epochs:
+        print(f"[✓] Stage 1 target of {args.epochs} epochs has already been completed (found checkpoint at epoch {start_epoch}). Fast-forwarding past Stage 1!")
+        return
+
     # 4. Build DataLoaders
     train_loader = build_kion_dataloader(
         manifest_path=args.manifest,

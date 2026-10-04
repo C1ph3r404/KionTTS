@@ -104,6 +104,10 @@ def main():
         start_epoch = state_meta.get("epoch", 0)
         start_step = state_meta.get("step", 0)
         print(f"[✓] Resuming Stage 2 from epoch {start_epoch}, step {start_step}...")
+
+        if start_epoch >= args.epochs:
+            print(f"[✓] Stage 2 target of {args.epochs} epochs has already been completed (found checkpoint at epoch {start_epoch}). Fast-forwarding past Stage 2!")
+            return
     else:
         # Load weights from Stage 1
         s1_ckpt = args.stage1_ckpt or ckpt_manager.find_latest_checkpoint(stage="stage1")

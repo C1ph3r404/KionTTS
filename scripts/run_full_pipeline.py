@@ -61,17 +61,28 @@ def main():
 
     # Step 2: Stage 1 Training
     if not args.skip_stage1:
-        cmd_s1 = (
-            f"{runner_prefix} scripts/train_stage1.py "
-            f"--epochs {args.stage1_epochs} "
-            f"--batch_size {args.batch_size} "
-            f"--accum_steps {args.accum_steps} "
-            f"--manifest {manifest_train} "
-            f"--data_root {args.data_dir} "
-            f"--hf_repo {args.hf_repo}"
-            f"{token_arg}"
-        )
-        run_command(cmd_s1, "Executing Stage 1: Acoustic Foundation & Tag Alignment")
+        from kion_core.checkpoint_manager import KionCheckpointManager
+        s1_mgr = KionCheckpointManager(checkpoint_dir="checkpoints", repo_id=args.hf_repo, hf_token=args.hf_token)
+        latest_s1 = s1_mgr.find_latest_checkpoint(stage="stage1")
+        s1_done = False
+        if latest_s1:
+            meta = s1_mgr.load_checkpoint(latest_s1, models={}, load_optimizers=False)
+            if meta.get("epoch", 0) >= args.stage1_epochs:
+                s1_done = True
+                print(f"[✓] Stage 1 already completed ({meta.get('epoch', 0)}/{args.stage1_epochs} epochs). Fast-forwarding directly to Stage 2!")
+
+        if not s1_done:
+            cmd_s1 = (
+                f"{runner_prefix} scripts/train_stage1.py "
+                f"--epochs {args.stage1_epochs} "
+                f"--batch_size {args.batch_size} "
+                f"--accum_steps {args.accum_steps} "
+                f"--manifest {manifest_train} "
+                f"--data_root {args.data_dir} "
+                f"--hf_repo {args.hf_repo}"
+                f"{token_arg}"
+            )
+            run_command(cmd_s1, "Executing Stage 1: Acoustic Foundation & Tag Alignment")
 
     # Step 3: Stage 2 Training
     if not args.skip_stage2:
