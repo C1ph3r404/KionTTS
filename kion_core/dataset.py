@@ -92,7 +92,9 @@ class KionManifestDataset(Dataset):
         if wave.ndim > 1:
             wave = wave[:, 0].squeeze()
         if sr != 24000:
-            wave = librosa.resample(wave, orig_sr=sr, target_sr=24000)
+            wave_t = torch.from_numpy(wave).float()
+            wave_t = torchaudio.functional.resample(wave_t, orig_freq=sr, new_freq=24000)
+            wave = wave_t.numpy()
 
         # Prepend/append zeros like StyleTTS2
         wave = np.concatenate([np.zeros(5000), wave, np.zeros(5000)], axis=0)
@@ -165,16 +167,40 @@ class KionCollater:
         return waves, texts, input_lengths, mels, output_lengths, ref_mels, tag_vectors, paths
 
 
-def build_kion_dataloader(manifest_path, root_dir, phonemizer_fn=None, batch_size=4, validation=False, num_workers=2):
+def build_kion_dataloader(
+    manifest_path,
+    root_dir,
+    phonemizer_fn=None,
+    batch_size=4,
+    validation=False,
+    num_workers=2,
+    is_distributed=False,
+    rank=0,
+    world_size=1,
+):
     dataset = KionManifestDataset(manifest_path, root_dir, phonemizer_fn=phonemizer_fn, validation=validation)
     collater = KionCollater()
+
+    sampler = None
+    if is_distributed and not validation:
+        sampler = torch.utils.data.distributed.DistributedSampler(
+            dataset,
+            num_replicas=world_size,
+            rank=rank,
+            shuffle=True,
+            drop_last=True,
+        )
+
     dataloader = DataLoader(
         dataset,
         batch_size=batch_size,
-        shuffle=(not validation),
+        shuffle=(sampler is None and not validation),
+        sampler=sampler,
         num_workers=num_workers,
         drop_last=(not validation),
         collate_fn=collater,
-        pin_memory=torch.cuda.is_available()
+        pin_memory=torch.cuda.is_available(),
+        persistent_workers=(num_workers > 0),
+        prefetch_factor=2 if num_workers > 0 else None,
     )
     return dataloader

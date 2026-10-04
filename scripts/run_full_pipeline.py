@@ -55,8 +55,12 @@ def main():
     else:
         print(f"[✓] Dataset manifest already prepared: {manifest_train}")
 
-    # Launch prefix (accelerate or direct python)
-    runner_prefix = "accelerate launch --multi_gpu" if args.multi_gpu else sys.executable
+    # Launch prefix (auto-detect dual GPUs / torchrun / accelerate)
+    num_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 1
+    if args.multi_gpu or num_gpus > 1:
+        runner_prefix = f"torchrun --nproc_per_node={num_gpus}"
+    else:
+        runner_prefix = sys.executable
     token_arg = f" --hf_token {args.hf_token}" if args.hf_token else ""
 
     # Step 2: Stage 1 Training

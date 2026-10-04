@@ -4,6 +4,8 @@ This document provides a comprehensive comparative evaluation between the **Curr
 
 All architectural and code claims have been verified against the physical files on disk.
 
+## NOTE: REPORT CAN BE OUTDATED! CHECK FILE LAST EDITED FOR ACCURACY!
+
 ---
 
 ## 1. Executive Summary & Root Cause Analysis

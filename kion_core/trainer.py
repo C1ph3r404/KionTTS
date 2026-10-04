@@ -32,7 +32,7 @@ from .checkpoint_manager import KionCheckpointManager
 from .synthesizer import KionSynthesizer
 
 DEFAULT_EVAL_PROMPTS = [
-    ("[neutral] Antigravity voice synthesis operational on neural cluster.", "neutral"),
+    ("[neutral=0.6] Antigravity voice synthesis operational on neural cluster.", "neutral"),
     ("[happy=0.9, excited=0.8] We did it! The full training pipeline converged with pristine acoustic fidelity!", "happy_excited"),
     ("[sarcasm=0.9] Oh, brilliant. Another zero-division warning to brighten my morning.", "sarcasm"),
     ("[soothing=0.8, calm=0.7] Take a deep breath. The loss curves are steadily dropping toward zero.", "soothing_calm"),
@@ -66,9 +66,23 @@ def compute_energy_norm(mel_slice):
     return log_norm(mel_slice).squeeze(1)
 
 
+class MyDistributedDataParallel(torch.nn.parallel.DistributedDataParallel):
+    """
+    Subclass of PyTorch DistributedDataParallel that delegates attribute/method access
+    to the underlying module, ensuring custom methods (e.g. predictor.F0Ntrain)
+    and attributes remain directly accessible.
+    """
+    def __getattr__(self, name):
+        try:
+            return super().__getattr__(name)
+        except AttributeError:
+            return getattr(self.module, name)
+
+
 class KionProductionTrainer:
     """
     Production-grade single-speaker StyleTTS2 trainer with emotion tag conditioning.
+    Optimized for single GPU and Kaggle dual T4 GPU (DDP) distributed training.
     """
     def __init__(
         self,
@@ -80,19 +94,52 @@ class KionProductionTrainer:
         device: str = "cuda" if torch.cuda.is_available() else "cpu",
         use_amp: bool = True,
         accum_steps: int = 1,
+        local_rank: int = -1,
+        rank: int = 0,
+        world_size: int = 1,
+        is_distributed: bool = False,
     ):
         self.model = model
         self.tag_encoder = tag_encoder
         self.ckpt_manager = checkpoint_manager
         self.output_dir = output_dir
         self.log_dir = log_dir
-        self.device = torch.device(device)
+
+        # Distributed state detection
+        self.local_rank = local_rank
+        self.rank = rank
+        self.world_size = world_size
+        self.is_distributed = is_distributed
+
+        if not self.is_distributed and "LOCAL_RANK" in os.environ:
+            self.local_rank = int(os.environ["LOCAL_RANK"])
+            self.rank = int(os.environ.get("RANK", 0))
+            self.world_size = int(os.environ.get("WORLD_SIZE", 1))
+            self.is_distributed = self.world_size > 1
+
+        self.is_main_process = (self.rank == 0)
+
+        # Set device
+        if self.local_rank >= 0 and torch.cuda.is_available():
+            self.device = torch.device(f"cuda:{self.local_rank}")
+        else:
+            self.device = torch.device(device)
+
         self.use_amp = use_amp and (self.device.type == "cuda")
         self.accum_steps = max(1, accum_steps)
 
-        os.makedirs(self.output_dir, exist_ok=True)
-        os.makedirs(self.log_dir, exist_ok=True)
-        self.writer = SummaryWriter(self.log_dir) if SummaryWriter is not None else None
+        # Hardware-specific performance optimizations for Kaggle T4 / Ampere
+        if self.device.type == "cuda":
+            torch.backends.cudnn.benchmark = True
+            if hasattr(torch, "set_float32_matmul_precision"):
+                torch.set_float32_matmul_precision("high")
+
+        if self.is_main_process:
+            os.makedirs(self.output_dir, exist_ok=True)
+            os.makedirs(self.log_dir, exist_ok=True)
+            self.writer = SummaryWriter(self.log_dir) if SummaryWriter is not None else None
+        else:
+            self.writer = None
 
         # Build base losses
         self.stft_loss = MultiResolutionSTFTLoss().to(self.device)
@@ -108,6 +155,7 @@ class KionProductionTrainer:
         """
         Dynamically manages GPU memory by loading ONLY the modules needed for the active stage.
         Unused modules are offloaded to CPU RAM, and GPU memory cache is cleared.
+        In multi-GPU mode, trainable modules are wrapped with DistributedDataParallel.
         """
         import gc
         if stage == "stage1":
@@ -127,14 +175,17 @@ class KionProductionTrainer:
             active_modules = list(self.model.keys())
             offload_modules = []
 
-        print(f"[*] Dynamically configuring GPU memory for [{stage}]...")
+        if self.is_main_process:
+            print(f"[*] Dynamically configuring GPU memory for [{stage}]...")
         # 1. Offload unused modules to CPU RAM first
         for k in offload_modules:
-            if k in self.model and self.model[k] is not None and hasattr(self.model[k], "to"):
-                self.model[k].to("cpu")
-                if hasattr(self.model[k], "eval"):
-                    self.model[k].eval()
-                for p in self.model[k].parameters():
+            if k in self.model and self.model[k] is not None:
+                mod = self.model[k].module if hasattr(self.model[k], "module") else self.model[k]
+                if hasattr(mod, "to"):
+                    mod.to("cpu")
+                if hasattr(mod, "eval"):
+                    mod.eval()
+                for p in mod.parameters():
                     p.requires_grad = False
 
         # 2. Flush GPU VRAM cache
@@ -144,19 +195,53 @@ class KionProductionTrainer:
 
         # 3. Move active modules to GPU
         for k in active_modules:
-            if k in self.model and self.model[k] is not None and hasattr(self.model[k], "to"):
-                self.model[k].to(self.device)
+            if k in self.model and self.model[k] is not None:
+                mod = self.model[k].module if hasattr(self.model[k], "module") else self.model[k]
+                if hasattr(mod, "to"):
+                    mod.to(self.device)
         self.tag_encoder.to(self.device)
 
-        # 4. Initialize GAN losses only when discriminators are active on GPU
+        # 4. Wrap trainable modules in DDP if distributed
+        if self.is_distributed:
+            dev_idx = self.device.index if self.device.index is not None else 0
+            trainable_keys = ["predictor", "bert_encoder", "text_encoder"]
+            if stage == "stage1":
+                if "bert" in self.model and self.model["bert"] is not None:
+                    trainable_keys.append("bert")
+            elif stage == "stage2":
+                trainable_keys += ["decoder", "mpd", "msd"]
+                if "bert" in self.model and self.model["bert"] is not None:
+                    trainable_keys.append("bert")
+
+            for k in trainable_keys:
+                if k in self.model and self.model[k] is not None:
+                    if not isinstance(self.model[k], torch.nn.parallel.DistributedDataParallel):
+                        self.model[k] = MyDistributedDataParallel(
+                            self.model[k],
+                            device_ids=[dev_idx],
+                            output_device=dev_idx,
+                            find_unused_parameters=True,
+                        )
+
+            if not isinstance(self.tag_encoder, torch.nn.parallel.DistributedDataParallel):
+                self.tag_encoder = MyDistributedDataParallel(
+                    self.tag_encoder,
+                    device_ids=[dev_idx],
+                    output_device=dev_idx,
+                    find_unused_parameters=True,
+                )
+
+        # 5. Initialize GAN losses only when discriminators are active on GPU
         if stage == "stage2" and "mpd" in self.model and "msd" in self.model:
-            self.gen_loss_fn = GeneratorLoss(self.model["mpd"], self.model["msd"]).to(self.device)
-            self.disc_loss_fn = DiscriminatorLoss(self.model["mpd"], self.model["msd"]).to(self.device)
+            mpd_mod = self.model["mpd"].module if hasattr(self.model["mpd"], "module") else self.model["mpd"]
+            msd_mod = self.model["msd"].module if hasattr(self.model["msd"], "module") else self.model["msd"]
+            self.gen_loss_fn = GeneratorLoss(mpd_mod, msd_mod).to(self.device)
+            self.disc_loss_fn = DiscriminatorLoss(mpd_mod, msd_mod).to(self.device)
         else:
             self.gen_loss_fn = None
             self.disc_loss_fn = None
 
-        if self.device.type == "cuda":
+        if self.device.type == "cuda" and self.is_main_process:
             allocated_mb = torch.cuda.memory_allocated(self.device) / (1024 * 1024)
             reserved_mb = torch.cuda.memory_reserved(self.device) / (1024 * 1024)
             print(f"[✓] Active GPU VRAM for [{stage}]: {allocated_mb:.1f} MB allocated ({reserved_mb:.1f} MB reserved)")
@@ -211,6 +296,9 @@ class KionProductionTrainer:
         Synthesizes benchmark audio evaluation samples, saves .wav files locally,
         logs audio to TensorBoard, and syncs to Hugging Face Hub under samples/.
         """
+        if not self.is_main_process:
+            return
+
         if "decoder" not in self.model or self.model["decoder"] is None:
             return
 
@@ -231,13 +319,13 @@ class KionProductionTrainer:
         self.tag_encoder.eval()
 
         # Ensure decoder is on self.device for synthesis
-        decoder = self.model["decoder"]
+        decoder_mod = self.model["decoder"].module if hasattr(self.model["decoder"], "module") else self.model["decoder"]
         try:
-            decoder_device = next(iter(decoder.parameters())).device
+            decoder_device = next(iter(decoder_mod.parameters())).device
         except Exception:
             decoder_device = self.device
         if decoder_device != self.device:
-            decoder.to(self.device)
+            decoder_mod.to(self.device)
 
         phonemizer_fn = None
         try:
@@ -247,9 +335,12 @@ class KionProductionTrainer:
         except Exception:
             pass
 
+        eval_model = {k: (v.module if hasattr(v, "module") else v) for k, v in self.model.items() if v is not None}
+        eval_tag_enc = self.tag_encoder.module if hasattr(self.tag_encoder, "module") else self.tag_encoder
+
         synthesizer = KionSynthesizer(
-            model=self.model,
-            tag_encoder=self.tag_encoder,
+            model=eval_model,
+            tag_encoder=eval_tag_enc,
             phonemizer_fn=phonemizer_fn,
             device=str(self.device),
         )
@@ -287,7 +378,7 @@ class KionProductionTrainer:
 
         # Restore decoder device if it was offloaded to CPU
         if decoder_device != self.device:
-            decoder.to(decoder_device)
+            decoder_mod.to(decoder_device)
 
         # Restore module training states
         for k, is_train in was_training.items():
@@ -311,16 +402,18 @@ class KionProductionTrainer:
         In Stage 1, HiFi-GAN decoder is frozen in eval mode with pretrained LibriTTS acoustic weights,
         guaranteeing clean acoustic output while Predictor and KionTagStyleEncoder adapt to Kion.
         """
-        print("\n" + "=" * 65)
-        print("Starting KionTTS Stage 1 Training: Acoustic Foundation & Tag Alignment")
-        print(f"  Target Epochs      : {epochs}")
-        print(f"  Start Epoch        : {start_epoch}")
-        print(f"  Start Step         : {start_step}")
-        print(f"  Learning Rate      : {lr}")
-        print(f"  Save Step Freq     : Every {save_step_freq} steps")
-        print(f"  Device             : {self.device}")
-        print(f"  Mixed Precision    : {'AMP FP16' if self.use_amp else 'FP32'}")
-        print("=" * 65 + "\n")
+        if self.is_main_process:
+            print("\n" + "=" * 65)
+            print("Starting KionTTS Stage 1 Training: Acoustic Foundation & Tag Alignment")
+            print(f"  Target Epochs      : {epochs}")
+            print(f"  Start Epoch        : {start_epoch}")
+            print(f"  Start Step         : {start_step}")
+            print(f"  Learning Rate      : {lr}")
+            print(f"  Save Step Freq     : Every {save_step_freq} steps")
+            print(f"  Device             : {self.device}")
+            print(f"  Distributed Multi-GPU : {self.is_distributed} (World Size: {self.world_size})")
+            print(f"  Mixed Precision    : {'AMP FP16' if self.use_amp else 'FP32'}")
+            print("=" * 65 + "\n")
 
         self.activate_stage_modules(stage="stage1")
         self._build_optimizers(stage="stage1", lr=lr)
@@ -328,18 +421,23 @@ class KionProductionTrainer:
         # Ensure reference modules are in eval mode
         for k in ["decoder", "style_encoder", "predictor_encoder", "text_aligner", "pitch_extractor"]:
             if k in self.model and self.model[k] is not None:
-                self.model[k].eval()
-                for p in self.model[k].parameters():
+                mod = self.model[k].module if hasattr(self.model[k], "module") else self.model[k]
+                mod.eval()
+                for p in mod.parameters():
                     p.requires_grad = False
 
         if start_epoch >= epochs:
-            print(f"[✓] Stage 1 target epochs already achieved ({start_epoch}/{epochs}). Skipping Stage 1 training.")
+            if self.is_main_process:
+                print(f"[✓] Stage 1 target epochs already achieved ({start_epoch}/{epochs}). Skipping Stage 1 training.")
             return
 
         best_loss = float("inf")
         global_step = start_step if start_step > 0 else start_epoch * len(train_loader)
 
         for epoch in range(start_epoch, epochs):
+            if hasattr(train_loader, "sampler") and hasattr(train_loader.sampler, "set_epoch"):
+                train_loader.sampler.set_epoch(epoch)
+
             epoch_start_time = time.time()
             self.tag_encoder.train()
             if "predictor" in self.model:
@@ -366,7 +464,8 @@ class KionProductionTrainer:
                 steps_done_in_epoch = start_step % batches_in_epoch
                 if steps_done_in_epoch > 0:
                     max_steps_this_epoch = batches_in_epoch - steps_done_in_epoch
-                    print(f"[*] Resuming mid-epoch: executing remaining {max_steps_this_epoch} steps to complete Epoch {epoch+1} (Global step {global_step})...")
+                    if self.is_main_process:
+                        print(f"[*] Resuming mid-epoch: executing remaining {max_steps_this_epoch} steps to complete Epoch {epoch+1} (Global step {global_step})...")
 
             for step, batch in enumerate(train_loader):
                 if step >= max_steps_this_epoch:
@@ -374,12 +473,12 @@ class KionProductionTrainer:
 
                 waves, texts, input_lengths, mels, output_lengths, ref_mels, tag_vectors, paths = batch
 
-                texts = texts.to(self.device)
-                input_lengths = input_lengths.to(self.device)
-                mels = mels.to(self.device)
-                output_lengths = output_lengths.to(self.device)
-                ref_mels = ref_mels.to(self.device)
-                tag_vectors = tag_vectors.to(self.device)
+                texts = texts.to(self.device, non_blocking=True)
+                input_lengths = input_lengths.to(self.device, non_blocking=True)
+                mels = mels.to(self.device, non_blocking=True)
+                output_lengths = output_lengths.to(self.device, non_blocking=True)
+                ref_mels = ref_mels.to(self.device, non_blocking=True)
+                tag_vectors = tag_vectors.to(self.device, non_blocking=True)
 
                 mel_input_length = output_lengths // 2
 
@@ -434,15 +533,14 @@ class KionProductionTrainer:
                     loss_f0 = F.smooth_l1_loss(F0_pred, F0_real)
                     loss_norm = F.smooth_l1_loss(N_pred, N_real)
 
-                    # StyleTTS2 Duration & CE loss
+                    # StyleTTS2 Duration & CE loss (vectorized across phoneme tokens)
                     loss_dur = 0.0
                     loss_ce = 0.0
                     for _s2s_pred, _text_input, _text_length in zip(d, d_gt, input_lengths):
                         _s2s_pred = _s2s_pred[:_text_length, :]
                         _text_input = _text_input[:_text_length].long()
-                        _s2s_trg = torch.zeros_like(_s2s_pred)
-                        for idx in range(_s2s_trg.shape[0]):
-                            _s2s_trg[idx, :_text_input[idx]] = 1.0
+                        cols_idx = torch.arange(_s2s_pred.size(1), device=_s2s_pred.device).unsqueeze(0)
+                        _s2s_trg = (cols_idx < _text_input.unsqueeze(1)).float()
                         _dur_pred = torch.sigmoid(_s2s_pred).sum(axis=1)
                         loss_dur = loss_dur + F.l1_loss(_dur_pred[1:_text_length-1], _text_input[1:_text_length-1].float())
                         loss_ce = loss_ce + F.binary_cross_entropy_with_logits(_s2s_pred.flatten(), _s2s_trg.flatten())
@@ -483,34 +581,37 @@ class KionProductionTrainer:
                 num_batches += 1
                 global_step += 1
 
-                # Periodic step-interval checkpoint saving & HF sync
+                # Periodic step-interval checkpoint saving & HF sync (main process only)
                 if save_step_freq > 0 and global_step % save_step_freq == 0:
-                    save_models = {
-                        "tag_encoder": self.tag_encoder,
-                        "predictor": self.model.get("predictor"),
-                        "bert": self.model.get("bert"),
-                        "bert_encoder": self.model.get("bert_encoder"),
-                        "text_encoder": self.model.get("text_encoder"),
-                        "decoder": self.model.get("decoder"),
-                        "style_encoder": self.model.get("style_encoder"),
-                    }
-                    save_opts = {
-                        "opt_tag": self.opt_tag,
-                        "opt_pred": self.opt_pred,
-                    }
-                    print(f"\n[*] Periodic Step Checkpoint: Step {global_step} (Epoch {epoch+1}). Syncing to HF Hub...")
-                    self.ckpt_manager.save_checkpoint(
-                        stage="stage1",
-                        epoch=epoch + 1,
-                        step=global_step,
-                        models=save_models,
-                        optimizers=save_opts,
-                        loss_val=(total_style_loss + total_pred_loss) / max(1, num_batches),
-                        is_best=False,
-                        upload_hf=True,
-                    )
+                    if self.is_main_process:
+                        save_models = {
+                            "tag_encoder": self.tag_encoder,
+                            "predictor": self.model.get("predictor"),
+                            "bert": self.model.get("bert"),
+                            "bert_encoder": self.model.get("bert_encoder"),
+                            "text_encoder": self.model.get("text_encoder"),
+                            "decoder": self.model.get("decoder"),
+                            "style_encoder": self.model.get("style_encoder"),
+                        }
+                        save_opts = {
+                            "opt_tag": self.opt_tag,
+                            "opt_pred": self.opt_pred,
+                        }
+                        print(f"\n[*] Periodic Step Checkpoint: Step {global_step} (Epoch {epoch+1}). Syncing to HF Hub...")
+                        self.ckpt_manager.save_checkpoint(
+                            stage="stage1",
+                            epoch=epoch + 1,
+                            step=global_step,
+                            models=save_models,
+                            optimizers=save_opts,
+                            loss_val=(total_style_loss + total_pred_loss) / max(1, num_batches),
+                            is_best=False,
+                            upload_hf=True,
+                        )
+                    if self.is_distributed and torch.distributed.is_initialized():
+                        torch.distributed.barrier()
 
-                if step % 20 == 0:
+                if self.is_main_process and step % 20 == 0:
                     print(
                         f"Epoch [{epoch+1:02d}/{epochs}] Step [{step+1:03d}/{max_steps_this_epoch}] (Global: {global_step}) "
                         f"StyleLoss: {loss_style.item():.4f} | "
@@ -524,50 +625,56 @@ class KionProductionTrainer:
             epoch_loss = avg_style + avg_pred
             epoch_time = time.time() - epoch_start_time
 
-            print(
-                f"\n=== Epoch {epoch+1:02d}/{epochs} Summary ({epoch_time:.1f}s) ===\n"
-                f"  Avg Style Loss     : {avg_style:.4f}\n"
-                f"  Avg Predictor Loss : {avg_pred:.4f}\n"
-                f"  Total Epoch Loss   : {epoch_loss:.4f}\n"
-            )
+            if self.is_main_process:
+                print(
+                    f"\n=== Epoch {epoch+1:02d}/{epochs} Summary ({epoch_time:.1f}s) ===\n"
+                    f"  Avg Style Loss     : {avg_style:.4f}\n"
+                    f"  Avg Predictor Loss : {avg_pred:.4f}\n"
+                    f"  Total Epoch Loss   : {epoch_loss:.4f}\n"
+                )
 
-            if self.writer is not None:
-                self.writer.add_scalar("Stage1/StyleLoss", avg_style, epoch + 1)
-                self.writer.add_scalar("Stage1/PredictorLoss", avg_pred, epoch + 1)
-                self.writer.add_scalar("Stage1/TotalLoss", epoch_loss, epoch + 1)
+                if self.writer is not None:
+                    self.writer.add_scalar("Stage1/StyleLoss", avg_style, epoch + 1)
+                    self.writer.add_scalar("Stage1/PredictorLoss", avg_pred, epoch + 1)
+                    self.writer.add_scalar("Stage1/TotalLoss", epoch_loss, epoch + 1)
 
-            # Checkpoint saving & remote sync
+            # Checkpoint saving & remote sync (main process only)
             is_best = epoch_loss < best_loss
             if is_best:
                 best_loss = epoch_loss
 
             if (epoch + 1) % save_freq == 0 or is_best or (epoch + 1) == epochs:
-                save_models = {
-                    "tag_encoder": self.tag_encoder,
-                    "predictor": self.model.get("predictor"),
-                    "bert": self.model.get("bert"),
-                    "bert_encoder": self.model.get("bert_encoder"),
-                    "text_encoder": self.model.get("text_encoder"),
-                    "decoder": self.model.get("decoder"),
-                    "style_encoder": self.model.get("style_encoder"),
-                }
-                save_opts = {
-                    "opt_tag": self.opt_tag,
-                    "opt_pred": self.opt_pred,
-                }
-                self.ckpt_manager.save_checkpoint(
-                    stage="stage1",
-                    epoch=epoch + 1,
-                    step=global_step,
-                    models=save_models,
-                    optimizers=save_opts,
-                    loss_val=epoch_loss,
-                    is_best=is_best,
-                    upload_hf=True,
-                )
-                self.generate_and_save_samples(stage="stage1", epoch=epoch + 1, step=global_step)
+                if self.is_main_process:
+                    save_models = {
+                        "tag_encoder": self.tag_encoder,
+                        "predictor": self.model.get("predictor"),
+                        "bert": self.model.get("bert"),
+                        "bert_encoder": self.model.get("bert_encoder"),
+                        "text_encoder": self.model.get("text_encoder"),
+                        "decoder": self.model.get("decoder"),
+                        "style_encoder": self.model.get("style_encoder"),
+                    }
+                    save_opts = {
+                        "opt_tag": self.opt_tag,
+                        "opt_pred": self.opt_pred,
+                    }
+                    self.ckpt_manager.save_checkpoint(
+                        stage="stage1",
+                        epoch=epoch + 1,
+                        step=global_step,
+                        models=save_models,
+                        optimizers=save_opts,
+                        loss_val=epoch_loss,
+                        is_best=is_best,
+                        upload_hf=True,
+                    )
+                    self.generate_and_save_samples(stage="stage1", epoch=epoch + 1, step=global_step)
 
-        print("[✓] Stage 1 Training Completed Successfully!")
+                if self.is_distributed and torch.distributed.is_initialized():
+                    torch.distributed.barrier()
+
+        if self.is_main_process:
+            print("[✓] Stage 1 Training Completed Successfully!")
 
     def train_stage2(
         self,
@@ -586,44 +693,55 @@ class KionProductionTrainer:
         Trains HiFi-GAN Decoder with MultiResolutionSTFT, MPD/MSD GAN, and grounded tag styles.
         Uses windowed micro-batching (`dec_window` frames) to guarantee stable T4/V100/A100 VRAM.
         """
-        print("\n" + "=" * 65)
-        print("Starting KionTTS Stage 2 Training: Full-Stack Acoustic & GAN Refinement")
-        print(f"  Target Epochs      : {epochs}")
-        print(f"  Start Epoch        : {start_epoch}")
-        print(f"  Start Step         : {start_step}")
-        print(f"  Learning Rate      : {lr}")
-        print(f"  Save Step Freq     : Every {save_step_freq} steps")
-        print(f"  Decoder Window     : {dec_window} frames ({dec_window * 300} samples)")
-        print(f"  Device             : {self.device}")
-        print("=" * 65 + "\n")
+        if self.is_main_process:
+            print("\n" + "=" * 65)
+            print("Starting KionTTS Stage 2 Training: Full-Stack Acoustic & GAN Refinement")
+            print(f"  Target Epochs      : {epochs}")
+            print(f"  Start Epoch        : {start_epoch}")
+            print(f"  Start Step         : {start_step}")
+            print(f"  Learning Rate      : {lr}")
+            print(f"  Save Step Freq     : Every {save_step_freq} steps")
+            print(f"  Decoder Window     : {dec_window} frames ({dec_window * 300} samples)")
+            print(f"  Device             : {self.device}")
+            print(f"  Distributed Multi-GPU : {self.is_distributed} (World Size: {self.world_size})")
+            print("=" * 65 + "\n")
 
         self.activate_stage_modules(stage="stage2")
         self._build_optimizers(stage="stage2", lr=lr)
 
         # Unfreeze decoder & discriminators for fine-tuning
         if "decoder" in self.model and self.model["decoder"] is not None:
-            self.model["decoder"].train()
-            for p in self.model["decoder"].parameters():
+            dec_mod = self.model["decoder"].module if hasattr(self.model["decoder"], "module") else self.model["decoder"]
+            dec_mod.train()
+            for p in dec_mod.parameters():
                 p.requires_grad = True
 
         if "mpd" in self.model and "msd" in self.model:
-            self.model["mpd"].train()
-            self.model["msd"].train()
-            for p in list(self.model["mpd"].parameters()) + list(self.model["msd"].parameters()):
+            mpd_mod = self.model["mpd"].module if hasattr(self.model["mpd"], "module") else self.model["mpd"]
+            msd_mod = self.model["msd"].module if hasattr(self.model["msd"], "module") else self.model["msd"]
+            mpd_mod.train()
+            msd_mod.train()
+            for p in list(mpd_mod.parameters()) + list(msd_mod.parameters()):
                 p.requires_grad = True
 
         if start_epoch >= epochs:
-            print(f"[✓] Stage 2 target epochs already achieved ({start_epoch}/{epochs}). Skipping Stage 2 training.")
+            if self.is_main_process:
+                print(f"[✓] Stage 2 target epochs already achieved ({start_epoch}/{epochs}). Skipping Stage 2 training.")
             return
 
         best_loss = float("inf")
         global_step = start_step if start_step > 0 else start_epoch * len(train_loader)
 
         for epoch in range(start_epoch, epochs):
+            if hasattr(train_loader, "sampler") and hasattr(train_loader.sampler, "set_epoch"):
+                train_loader.sampler.set_epoch(epoch)
+
             epoch_start_time = time.time()
             self.tag_encoder.train()
-            self.model["predictor"].train()
-            self.model["decoder"].train()
+            if "predictor" in self.model:
+                self.model["predictor"].train()
+            if "decoder" in self.model:
+                self.model["decoder"].train()
 
             total_stft_loss = 0.0
             total_gen_loss = 0.0
@@ -636,7 +754,8 @@ class KionProductionTrainer:
                 steps_done_in_epoch = start_step % batches_in_epoch
                 if steps_done_in_epoch > 0:
                     max_steps_this_epoch = batches_in_epoch - steps_done_in_epoch
-                    print(f"[*] Resuming mid-epoch: executing remaining {max_steps_this_epoch} steps to complete Epoch {epoch+1} (Global step {global_step})...")
+                    if self.is_main_process:
+                        print(f"[*] Resuming mid-epoch: executing remaining {max_steps_this_epoch} steps to complete Epoch {epoch+1} (Global step {global_step})...")
 
             for step, batch in enumerate(train_loader):
                 if step >= max_steps_this_epoch:
@@ -644,12 +763,12 @@ class KionProductionTrainer:
 
                 waves, texts, input_lengths, mels, output_lengths, ref_mels, tag_vectors, paths = batch
 
-                texts = texts.to(self.device)
-                input_lengths = input_lengths.to(self.device)
-                mels = mels.to(self.device)
-                output_lengths = output_lengths.to(self.device)
-                ref_mels = ref_mels.to(self.device)
-                tag_vectors = tag_vectors.to(self.device)
+                texts = texts.to(self.device, non_blocking=True)
+                input_lengths = input_lengths.to(self.device, non_blocking=True)
+                mels = mels.to(self.device, non_blocking=True)
+                output_lengths = output_lengths.to(self.device, non_blocking=True)
+                ref_mels = ref_mels.to(self.device, non_blocking=True)
+                tag_vectors = tag_vectors.to(self.device, non_blocking=True)
 
                 batch_size = texts.size(0)
 
@@ -695,9 +814,6 @@ class KionProductionTrainer:
                     d, p = self.model["predictor"](d_en, cond_style, input_lengths, s2s_attn_mono, text_mask)
 
                 # ── Step B: Sliced Real Audio & Decoder Forward ──
-                # Slicing matching StyleTTS2:
-                # `dec_window` is in downsampled frames (hop 600, each frame = 2 mel frames = 600 audio samples)
-                # Slicing win_len frames produces win_len * 600 audio samples.
                 win_len = min(dec_window, int(mel_input_length.min().item() - 1))
                 if win_len < 10:
                     continue
@@ -727,9 +843,9 @@ class KionProductionTrainer:
                         w_sub = np.pad(w_raw, (0, max(0, end_sample - len(w_raw))))[st_sample:end_sample]
                     if len(w_sub) < target_len:
                         w_sub = np.pad(w_sub, (0, target_len - len(w_sub)))
-                    wav_slices.append(torch.from_numpy(w_sub[:target_len]).float().to(self.device))
+                    wav_slices.append(w_sub[:target_len])
 
-                y_real = torch.stack(wav_slices).unsqueeze(1)  # (B, 1, win_len * 600)
+                y_real = torch.from_numpy(np.stack(wav_slices)).float().unsqueeze(1).to(self.device, non_blocking=True)
                 en_sub = torch.cat(en_slices, dim=0)
                 p_sub = torch.cat(p_slices, dim=0)
                 gt_sub = torch.cat(mel_slices, dim=0)
@@ -802,8 +918,75 @@ class KionProductionTrainer:
                 num_batches += 1
                 global_step += 1
 
-                # Periodic step-interval checkpoint saving & HF sync
+                # Periodic step-interval checkpoint saving & HF sync (main process only)
                 if save_step_freq > 0 and global_step % save_step_freq == 0:
+                    if self.is_main_process:
+                        save_models = {
+                            "tag_encoder": self.tag_encoder,
+                            "predictor": self.model.get("predictor"),
+                            "bert": self.model.get("bert"),
+                            "bert_encoder": self.model.get("bert_encoder"),
+                            "text_encoder": self.model.get("text_encoder"),
+                            "decoder": self.model.get("decoder"),
+                            "style_encoder": self.model.get("style_encoder"),
+                            "mpd": self.model.get("mpd"),
+                            "msd": self.model.get("msd"),
+                        }
+                        save_opts = {
+                            "opt_tag": self.opt_tag,
+                            "opt_pred": self.opt_pred,
+                            "opt_dec": self.opt_dec,
+                            "opt_disc": self.opt_disc,
+                        }
+                        print(f"\n[*] Periodic Step Checkpoint: Step {global_step} (Epoch {epoch+1}). Syncing to HF Hub...")
+                        self.ckpt_manager.save_checkpoint(
+                            stage="stage2",
+                            epoch=epoch + 1,
+                            step=global_step,
+                            models=save_models,
+                            optimizers=save_opts,
+                            loss_val=(total_stft_loss + total_gen_loss) / max(1, num_batches),
+                            is_best=False,
+                            upload_hf=True,
+                        )
+                    if self.is_distributed and torch.distributed.is_initialized():
+                        torch.distributed.barrier()
+
+                if self.is_main_process and step % 20 == 0:
+                    print(
+                        f"Stage2 Epoch [{epoch+1:02d}/{epochs}] Step [{step+1:03d}/{max_steps_this_epoch}] (Global: {global_step}) "
+                        f"STFTLoss: {loss_stft.item():.4f} | "
+                        f"GenLoss: {loss_gen.item():.4f} | "
+                        f"DiscLoss: {loss_d_total.item():.4f} | "
+                        f"StyleLoss: {loss_style.item():.4f}"
+                    )
+
+            avg_stft = total_stft_loss / max(1, num_batches)
+            avg_gen = total_gen_loss / max(1, num_batches)
+            avg_disc = total_disc_loss / max(1, num_batches)
+            epoch_loss = avg_stft + avg_gen
+            epoch_time = time.time() - epoch_start_time
+
+            if self.is_main_process:
+                print(
+                    f"\n=== Stage 2 Epoch {epoch+1:02d}/{epochs} Summary ({epoch_time:.1f}s) ===\n"
+                    f"  Avg STFT Loss : {avg_stft:.4f}\n"
+                    f"  Avg Gen Loss  : {avg_gen:.4f}\n"
+                    f"  Avg Disc Loss : {avg_disc:.4f}\n"
+                )
+
+                if self.writer is not None:
+                    self.writer.add_scalar("Stage2/STFTLoss", avg_stft, epoch + 1)
+                    self.writer.add_scalar("Stage2/GenLoss", avg_gen, epoch + 1)
+                    self.writer.add_scalar("Stage2/DiscLoss", avg_disc, epoch + 1)
+
+            # Checkpoint saving & remote sync (main process only)
+            is_best = epoch_loss < best_loss
+            if is_best:
+                best_loss = epoch_loss
+
+            if (epoch + 1) % save_freq == 0 or is_best or (epoch + 1) == epochs:
+                if self.is_main_process:
                     save_models = {
                         "tag_encoder": self.tag_encoder,
                         "predictor": self.model.get("predictor"),
@@ -821,78 +1004,79 @@ class KionProductionTrainer:
                         "opt_dec": self.opt_dec,
                         "opt_disc": self.opt_disc,
                     }
-                    print(f"\n[*] Periodic Step Checkpoint: Step {global_step} (Epoch {epoch+1}). Syncing to HF Hub...")
                     self.ckpt_manager.save_checkpoint(
                         stage="stage2",
                         epoch=epoch + 1,
                         step=global_step,
                         models=save_models,
                         optimizers=save_opts,
-                        loss_val=(total_stft_loss + total_gen_loss) / max(1, num_batches),
-                        is_best=False,
+                        loss_val=epoch_loss,
+                        is_best=is_best,
                         upload_hf=True,
                     )
+                    self.generate_and_save_samples(stage="stage2", epoch=epoch + 1, step=global_step)
 
-                if step % 20 == 0:
-                    print(
-                        f"Stage2 Epoch [{epoch+1:02d}/{epochs}] Step [{step+1:03d}/{max_steps_this_epoch}] (Global: {global_step}) "
-                        f"STFTLoss: {loss_stft.item():.4f} | "
-                        f"GenLoss: {loss_gen.item():.4f} | "
-                        f"DiscLoss: {loss_d_total.item():.4f} | "
-                        f"StyleLoss: {loss_style.item():.4f}"
-                    )
+                if self.is_distributed and torch.distributed.is_initialized():
+                    torch.distributed.barrier()
 
-            avg_stft = total_stft_loss / max(1, num_batches)
-            avg_gen = total_gen_loss / max(1, num_batches)
-            avg_disc = total_disc_loss / max(1, num_batches)
-            epoch_loss = avg_stft + avg_gen
-            epoch_time = time.time() - epoch_start_time
+        if self.is_main_process:
+            print("[✓] Stage 2 Training Completed Successfully!")
 
-            print(
-                f"\n=== Stage 2 Epoch {epoch+1:02d}/{epochs} Summary ({epoch_time:.1f}s) ===\n"
-                f"  Avg STFT Loss : {avg_stft:.4f}\n"
-                f"  Avg Gen Loss  : {avg_gen:.4f}\n"
-                f"  Avg Disc Loss : {avg_disc:.4f}\n"
-            )
 
-            if self.writer is not None:
-                self.writer.add_scalar("Stage2/STFTLoss", avg_stft, epoch + 1)
-                self.writer.add_scalar("Stage2/GenLoss", avg_gen, epoch + 1)
-                self.writer.add_scalar("Stage2/DiscLoss", avg_disc, epoch + 1)
+def run_training_pipeline(
+    model: Dict[str, Any],
+    tag_encoder: KionTagStyleEncoder,
+    train_loader,
+    val_loader=None,
+    config: Optional[Dict[str, Any]] = None,
+    device: str = "cuda" if torch.cuda.is_available() else "cpu",
+    log_dir: str = "checkpoints",
+    eval_dir: str = "eval_samples",
+    phonemizer_fn=None,
+    checkpoint_manager: Optional[KionCheckpointManager] = None,
+) -> str:
+    """
+    Unified training pipeline runner for notebooks (e.g. KionTTS_Kaggle_Training_Pipeline.ipynb).
+    Executes Stage 1 up to config['joint_epoch'] and Stage 2 up to config['epochs'].
+    """
+    cfg = config or {}
+    total_epochs = cfg.get("epochs", 6)
+    joint_epoch = cfg.get("joint_epoch", 3)
+    lr = cfg.get("lr", 1e-4)
+    accum_steps = cfg.get("accum_steps", 1)
+    save_freq = cfg.get("save_freq", 1)
 
-            # Checkpoint saving & remote sync
-            is_best = epoch_loss < best_loss
-            if is_best:
-                best_loss = epoch_loss
+    ckpt_manager = checkpoint_manager or KionCheckpointManager(checkpoint_dir=log_dir)
 
-            if (epoch + 1) % save_freq == 0 or is_best or (epoch + 1) == epochs:
-                save_models = {
-                    "tag_encoder": self.tag_encoder,
-                    "predictor": self.model.get("predictor"),
-                    "bert": self.model.get("bert"),
-                    "bert_encoder": self.model.get("bert_encoder"),
-                    "text_encoder": self.model.get("text_encoder"),
-                    "decoder": self.model.get("decoder"),
-                    "style_encoder": self.model.get("style_encoder"),
-                    "mpd": self.model.get("mpd"),
-                    "msd": self.model.get("msd"),
-                }
-                save_opts = {
-                    "opt_tag": self.opt_tag,
-                    "opt_pred": self.opt_pred,
-                    "opt_dec": self.opt_dec,
-                    "opt_disc": self.opt_disc,
-                }
-                self.ckpt_manager.save_checkpoint(
-                    stage="stage2",
-                    epoch=epoch + 1,
-                    step=global_step,
-                    models=save_models,
-                    optimizers=save_opts,
-                    loss_val=epoch_loss,
-                    is_best=is_best,
-                    upload_hf=True,
-                )
-                self.generate_and_save_samples(stage="stage2", epoch=epoch + 1, step=global_step)
+    trainer = KionProductionTrainer(
+        model=model,
+        tag_encoder=tag_encoder,
+        checkpoint_manager=ckpt_manager,
+        output_dir=log_dir,
+        device=device,
+        accum_steps=accum_steps,
+    )
 
-        print("[✓] Stage 2 Training Completed Successfully!")
+    # Stage 1: up to joint_epoch
+    if joint_epoch > 0:
+        trainer.train_stage1(
+            train_loader=train_loader,
+            val_loader=val_loader,
+            epochs=joint_epoch,
+            lr=lr,
+            save_freq=save_freq,
+        )
+
+    # Stage 2: up to total_epochs
+    if total_epochs > joint_epoch:
+        trainer.train_stage2(
+            train_loader=train_loader,
+            val_loader=val_loader,
+            epochs=total_epochs,
+            start_epoch=joint_epoch,
+            lr=lr,
+            save_freq=save_freq,
+        )
+
+    latest_ckpt = ckpt_manager.find_latest_checkpoint(stage="stage2") or ckpt_manager.find_latest_checkpoint(stage="stage1")
+    return latest_ckpt or os.path.join(log_dir, "kion_stage2_latest.pth")

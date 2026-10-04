@@ -67,11 +67,29 @@ def main():
     parser.add_argument("--save_freq", type=int, default=5, help="Epoch save frequency")
     parser.add_argument("--save_step_freq", type=int, default=500, help="Step-interval save & HF sync frequency")
     parser.add_argument("--accum_steps", type=int, default=1, help="Gradient accumulation steps")
+    parser.add_argument("--local_rank", type=int, default=-1, help="Local rank for distributed training")
+    parser.add_argument("--num_workers", type=int, default=2, help="DataLoader worker processes per GPU")
     parser.add_argument("--hf_repo", type=str, default="nate0001/KionTTS", help="Hugging Face repo for checkpoint sync")
     parser.add_argument("--hf_token", type=str, default=None, help="Hugging Face API token (defaults to Kaggle Secrets or env)")
     args = parser.parse_args()
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    # Setup distributed multi-GPU (Kaggle dual T4 / torchrun / accelerate)
+    local_rank = args.local_rank if args.local_rank != -1 else int(os.environ.get("LOCAL_RANK", -1))
+    world_size = int(os.environ.get("WORLD_SIZE", 1))
+    rank = int(os.environ.get("RANK", 0))
+    is_distributed = (world_size > 1) or (local_rank != -1)
+
+    if is_distributed:
+        if local_rank == -1:
+            local_rank = 0
+        torch.cuda.set_device(local_rank)
+        if not torch.distributed.is_initialized():
+            torch.distributed.init_process_group(backend="nccl")
+        device = f"cuda:{local_rank}"
+    else:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    is_main_process = (rank == 0)
 
     # 1. Load StyleTTS2 Backbone
     model, config = load_styletts2_backbone(args.config, args.pretrained_ckpt, device=device)
@@ -98,18 +116,24 @@ def main():
         state_meta = ckpt_manager.load_checkpoint(latest_ckpt, models=models_to_load, load_optimizers=False)
         start_epoch = state_meta.get("epoch", 0)
         start_step = state_meta.get("step", 0)
-        print(f"[✓] Resuming Stage 1 from epoch {start_epoch}, step {start_step}...")
+        if is_main_process:
+            print(f"[✓] Resuming Stage 1 from epoch {start_epoch}, step {start_step}...")
 
     if start_epoch >= args.epochs:
-        print(f"[✓] Stage 1 target of {args.epochs} epochs has already been completed (found checkpoint at epoch {start_epoch}). Exiting Stage 1.")
+        if is_main_process:
+            print(f"[✓] Stage 1 target of {args.epochs} epochs has already been completed (found checkpoint at epoch {start_epoch}). Exiting Stage 1.")
         return
 
-    # 4. Build DataLoaders
+    # 4. Build DataLoaders (with DistributedSampler across dual T4s)
     train_loader = build_kion_dataloader(
         manifest_path=args.manifest,
         root_dir=args.data_root,
         batch_size=args.batch_size,
         validation=False,
+        num_workers=args.num_workers,
+        is_distributed=is_distributed,
+        rank=rank,
+        world_size=world_size,
     )
     val_loader = None
     if os.path.exists(args.val_manifest):
@@ -118,6 +142,8 @@ def main():
             root_dir=args.data_root,
             batch_size=args.batch_size,
             validation=True,
+            num_workers=args.num_workers,
+            is_distributed=False,
         )
 
     # 5. Initialize Production Trainer
@@ -128,6 +154,10 @@ def main():
         output_dir=args.checkpoint_dir,
         device=device,
         accum_steps=args.accum_steps,
+        local_rank=local_rank,
+        rank=rank,
+        world_size=world_size,
+        is_distributed=is_distributed,
     )
 
     # 6. Execute Stage 1 Training
@@ -141,6 +171,9 @@ def main():
         save_freq=args.save_freq,
         save_step_freq=args.save_step_freq,
     )
+
+    if is_distributed and torch.distributed.is_initialized():
+        torch.distributed.destroy_process_group()
 
 
 if __name__ == "__main__":
