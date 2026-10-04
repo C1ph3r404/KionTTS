@@ -232,6 +232,17 @@ class KionProductionTrainer:
                     mod.to(self.device)
         self.tag_encoder.to(self.device)
 
+        # Freeze non-trainable reference feature extractors in Stage 2
+        if stage == "stage2":
+            frozen_keys = ["text_encoder", "style_encoder", "predictor_encoder", "pitch_extractor", "text_aligner"]
+            for k in frozen_keys:
+                if k in self.model and self.model[k] is not None:
+                    mod = self.model[k].module if hasattr(self.model[k], "module") else self.model[k]
+                    if hasattr(mod, "eval"):
+                        mod.eval()
+                    for p in mod.parameters():
+                        p.requires_grad = False
+
         # 4. Wrap trainable modules in DDP if distributed
         if self.is_distributed:
             dev_idx = self.device.index if self.device.index is not None else 0
@@ -306,14 +317,12 @@ class KionProductionTrainer:
         tag_params = list(self.tag_encoder.parameters())
         self.opt_tag = torch.optim.AdamW(tag_params, lr=lr * 2.0, betas=(0.9, 0.99), weight_decay=1e-4)
 
-        # 2. Prosody Predictor & BERT Optimizer
+        # 2. Prosody Predictor & BERT Encoder Optimizer
         pred_params = []
         if "predictor" in self.model:
             pred_params += list(self.model["predictor"].parameters())
         if "bert_encoder" in self.model:
             pred_params += list(self.model["bert_encoder"].parameters())
-        if stage != "stage1" and "text_encoder" in self.model:
-            pred_params += list(self.model["text_encoder"].parameters())
         
         self.opt_pred = torch.optim.AdamW(pred_params, lr=lr, betas=(0.9, 0.99), weight_decay=1e-4)
 
@@ -844,15 +853,39 @@ class KionProductionTrainer:
 
             epoch_start_time = time.time()
             self.tag_encoder.train()
-            if "predictor" in self.model:
+            if "predictor" in self.model and self.model["predictor"] is not None:
                 self.model["predictor"].train()
-            if "decoder" in self.model:
+            if "decoder" in self.model and self.model["decoder"] is not None:
                 self.model["decoder"].train()
+            if "bert_encoder" in self.model and self.model["bert_encoder"] is not None:
+                self.model["bert_encoder"].train()
+            if "bert" in self.model and self.model["bert"] is not None:
+                self.model["bert"].train()
+            if "mpd" in self.model and self.model["mpd"] is not None:
+                self.model["mpd"].train()
+            if "msd" in self.model and self.model["msd"] is not None:
+                self.model["msd"].train()
+
+            # Ensure reference feature extractors remain strictly in eval mode
+            for k in ["text_encoder", "style_encoder", "predictor_encoder", "pitch_extractor", "text_aligner"]:
+                if k in self.model and self.model[k] is not None:
+                    mod = self.model[k].module if hasattr(self.model[k], "module") else self.model[k]
+                    if hasattr(mod, "eval"):
+                        mod.eval()
 
             total_stft_loss = 0.0
             total_gen_loss = 0.0
             total_disc_loss = 0.0
             num_batches = 0
+
+            self.opt_tag.zero_grad(set_to_none=True)
+            self.opt_pred.zero_grad(set_to_none=True)
+            if self.opt_dec:
+                self.opt_dec.zero_grad(set_to_none=True)
+            if self.opt_bert:
+                self.opt_bert.zero_grad(set_to_none=True)
+            if self.opt_disc:
+                self.opt_disc.zero_grad(set_to_none=True)
 
             batches_in_epoch = len(train_loader)
             max_steps_this_epoch = batches_in_epoch
@@ -906,12 +939,12 @@ class KionProductionTrainer:
                                         end_f = int((ti + 1) * step_val) if ti < t_l - 1 else m_l
                                         s2s_attn_mono[b, ti, st_f:max(st_f + 1, end_f)] = 1.0
 
+                        # Pretrained acoustic text representations (fixed reference features in Stage 2)
+                        t_en = self.model["text_encoder"](texts, input_lengths, text_mask)
+                        asr = (t_en @ s2s_attn_mono)  # (B, 512, mel_input_length)
+
                     s_tag = self.tag_encoder(tag_vectors)
                     loss_style = self.style_loss_fn(s_tag, s_audio_full)
-
-                    # Encode acoustic text representations (t_en) aligned to mel frames: asr
-                    t_en = self.model["text_encoder"](texts, input_lengths, text_mask)
-                    asr = (t_en @ s2s_attn_mono)  # (B, 512, mel_input_length)
 
                     bert_dur = self.model["bert"](texts, attention_mask=(~text_mask).int())
                     d_en = self.model["bert_encoder"](bert_dur).transpose(-1, -2)
@@ -981,6 +1014,20 @@ class KionProductionTrainer:
 
                     loss_g_total = (loss_stft * 2.5 + loss_gen * 1.0 + loss_style * 1.0 + loss_f0_rec + loss_norm_rec) / self.accum_steps
 
+                # NaN/Inf guard
+                if torch.isnan(loss_g_total) or torch.isinf(loss_g_total):
+                    if self.is_main_process:
+                        print(f"  [!] Notice: NaN/Inf detected in loss_g_total at step {step+1}. Skipping optimizer update.")
+                    self.opt_tag.zero_grad(set_to_none=True)
+                    self.opt_pred.zero_grad(set_to_none=True)
+                    if self.opt_dec:
+                        self.opt_dec.zero_grad(set_to_none=True)
+                    if self.opt_bert:
+                        self.opt_bert.zero_grad(set_to_none=True)
+                    if self.opt_disc:
+                        self.opt_disc.zero_grad(set_to_none=True)
+                    continue
+
                 # ── Step C: Generator Backward & Accumulation ──
                 is_accumulating = ((step + 1) % self.accum_steps != 0) and ((step + 1) != max_steps_this_epoch)
                 sync_ctx_g = maybe_no_sync(
@@ -1007,6 +1054,8 @@ class KionProductionTrainer:
                     self.scaler.unscale_(self.opt_pred)
                     if self.opt_dec:
                         self.scaler.unscale_(self.opt_dec)
+                    if self.opt_bert:
+                        self.scaler.unscale_(self.opt_bert)
 
                     # Explicitly synchronize predictor gradients across distributed ranks (single coalesced all_reduce)
                     if self.is_distributed and "predictor" in self.model and self.model["predictor"] is not None:
@@ -1025,17 +1074,23 @@ class KionProductionTrainer:
                     torch.nn.utils.clip_grad_norm_(self.opt_pred.param_groups[0]["params"], max_norm=5.0)
                     if self.opt_dec:
                         torch.nn.utils.clip_grad_norm_(self.opt_dec.param_groups[0]["params"], max_norm=5.0)
+                    if self.opt_bert:
+                        torch.nn.utils.clip_grad_norm_(self.opt_bert.param_groups[0]["params"], max_norm=5.0)
 
                     self.scaler.step(self.opt_tag)
                     self.scaler.step(self.opt_pred)
                     if self.opt_dec:
                         self.scaler.step(self.opt_dec)
+                    if self.opt_bert:
+                        self.scaler.step(self.opt_bert)
                     self.scaler.update()
 
                     self.opt_tag.zero_grad(set_to_none=True)
                     self.opt_pred.zero_grad(set_to_none=True)
                     if self.opt_dec:
                         self.opt_dec.zero_grad(set_to_none=True)
+                    if self.opt_bert:
+                        self.opt_bert.zero_grad(set_to_none=True)
 
                     if self.disc_loss_fn and self.opt_disc:
                         self.scaler_d.unscale_(self.opt_disc)
@@ -1070,6 +1125,8 @@ class KionProductionTrainer:
                             "opt_dec": self.opt_dec,
                             "opt_disc": self.opt_disc,
                         }
+                        if self.opt_bert is not None:
+                            save_opts["opt_bert"] = self.opt_bert
                         print(f"\n[*] Periodic Step Checkpoint: Step {global_step} (Epoch {epoch+1}). Syncing to HF Hub...")
                         self.ckpt_manager.save_checkpoint(
                             stage="stage2",
@@ -1142,6 +1199,8 @@ class KionProductionTrainer:
                         "opt_dec": self.opt_dec,
                         "opt_disc": self.opt_disc,
                     }
+                    if self.opt_bert is not None:
+                        save_opts["opt_bert"] = self.opt_bert
                     self.ckpt_manager.save_checkpoint(
                         stage="stage2",
                         epoch=epoch + 1,
