@@ -79,6 +79,27 @@ class MyDistributedDataParallel(torch.nn.parallel.DistributedDataParallel):
             return getattr(self.module, name)
 
 
+from contextlib import contextmanager
+
+@contextmanager
+def maybe_no_sync(modules, enabled: bool = True):
+    """Context manager to suppress DDP gradient all-reduce during gradient accumulation steps."""
+    if not enabled:
+        yield
+        return
+    sync_contexts = []
+    for m in modules:
+        if m is not None and hasattr(m, "no_sync"):
+            sync_contexts.append(m.no_sync())
+    for ctx in sync_contexts:
+        ctx.__enter__()
+    try:
+        yield
+    finally:
+        for ctx in reversed(sync_contexts):
+            ctx.__exit__(None, None, None)
+
+
 class KionProductionTrainer:
     """
     Production-grade single-speaker StyleTTS2 trainer with emotion tag conditioning.
@@ -232,6 +253,15 @@ class KionProductionTrainer:
             else:
                 trainable_keys = []
 
+            # Freeze bert.pooler if present: StyleTTS2 only uses sequence outputs;
+            # the pooler is never used in the loss. Freezing it prevents DDP from tracking
+            # unused pooler parameters (indices 23, 24).
+            if "bert" in self.model and self.model["bert"] is not None:
+                bert_mod = self.model["bert"].module if hasattr(self.model["bert"], "module") else self.model["bert"]
+                if hasattr(bert_mod, "pooler") and bert_mod.pooler is not None:
+                    for p in bert_mod.pooler.parameters():
+                        p.requires_grad = False
+
             for k in trainable_keys:
                 if k in self.model and self.model[k] is not None:
                     if not isinstance(self.model[k], torch.nn.parallel.DistributedDataParallel):
@@ -239,7 +269,7 @@ class KionProductionTrainer:
                             self.model[k],
                             device_ids=[dev_idx],
                             output_device=dev_idx,
-                            find_unused_parameters=False,
+                            find_unused_parameters=True,
                         )
 
             if not isinstance(self.tag_encoder, torch.nn.parallel.DistributedDataParallel):
@@ -247,7 +277,7 @@ class KionProductionTrainer:
                     self.tag_encoder,
                     device_ids=[dev_idx],
                     output_device=dev_idx,
-                    find_unused_parameters=False,
+                    find_unused_parameters=True,
                 )
 
             # Ensure predictor parameters are synchronized across ranks at stage start
@@ -287,10 +317,12 @@ class KionProductionTrainer:
         
         self.opt_pred = torch.optim.AdamW(pred_params, lr=lr, betas=(0.9, 0.99), weight_decay=1e-4)
 
-        # 3. PL-BERT fine-tuning (conservative LR)
+        # 3. PL-BERT fine-tuning (conservative LR, only trainable parameters)
         if "bert" in self.model and hasattr(self.model["bert"], "parameters"):
+            bert_mod = self.model["bert"].module if hasattr(self.model["bert"], "module") else self.model["bert"]
+            bert_params = [p for p in bert_mod.parameters() if p.requires_grad]
             self.opt_bert = torch.optim.AdamW(
-                self.model["bert"].parameters(), lr=lr * 0.1, betas=(0.9, 0.99), weight_decay=1e-2
+                bert_params, lr=lr * 0.1, betas=(0.9, 0.99), weight_decay=1e-2
             )
         else:
             self.opt_bert = None
@@ -575,8 +607,14 @@ class KionProductionTrainer:
                     # Combined Step Loss
                     loss_step = (loss_style * 2.0 + loss_predictor) / self.accum_steps
 
-                # Backward pass
-                self.scaler.scale(loss_step).backward()
+                # Backward pass with no_sync during accumulation steps
+                is_accumulating = ((step + 1) % self.accum_steps != 0) and ((step + 1) != max_steps_this_epoch)
+                sync_ctx = maybe_no_sync(
+                    [self.tag_encoder, self.model.get("bert"), self.model.get("bert_encoder")],
+                    enabled=(self.is_distributed and is_accumulating)
+                )
+                with sync_ctx:
+                    self.scaler.scale(loss_step).backward()
 
                 if (step + 1) % self.accum_steps == 0 or (step + 1) == max_steps_this_epoch:
                     self.scaler.unscale_(self.opt_tag)
@@ -917,14 +955,25 @@ class KionProductionTrainer:
                     loss_g_total = (loss_stft * 2.5 + loss_gen * 1.0 + loss_style * 1.0 + loss_f0_rec + loss_norm_rec) / self.accum_steps
 
                 # ── Step C: Generator Backward & Accumulation ──
-                self.scaler.scale(loss_g_total).backward()
+                is_accumulating = ((step + 1) % self.accum_steps != 0) and ((step + 1) != max_steps_this_epoch)
+                sync_ctx_g = maybe_no_sync(
+                    [self.tag_encoder, self.model.get("decoder"), self.model.get("bert_encoder"), self.model.get("bert")],
+                    enabled=(self.is_distributed and is_accumulating)
+                )
+                with sync_ctx_g:
+                    self.scaler.scale(loss_g_total).backward()
 
                 # ── Step D: Discriminator Backward & Accumulation ──
                 loss_d_total = torch.tensor(0.0, device=self.device)
                 if self.disc_loss_fn and self.opt_disc:
+                    sync_ctx_d = maybe_no_sync(
+                        [self.model.get("mpd"), self.model.get("msd")],
+                        enabled=(self.is_distributed and is_accumulating)
+                    )
                     with self.autocast():
                         loss_d_total = self.disc_loss_fn(y_real, y_rec.detach()) / self.accum_steps
-                    self.scaler_d.scale(loss_d_total).backward()
+                    with sync_ctx_d:
+                        self.scaler_d.scale(loss_d_total).backward()
 
                 if (step + 1) % self.accum_steps == 0 or (step + 1) == max_steps_this_epoch:
                     self.scaler.unscale_(self.opt_tag)
