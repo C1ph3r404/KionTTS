@@ -160,20 +160,21 @@ def main():
         is_distributed=is_distributed,
     )
 
-    # 6. Execute Stage 1 Training
-    trainer.train_stage1(
-        train_loader=train_loader,
-        val_loader=val_loader,
-        epochs=args.epochs,
-        start_epoch=start_epoch,
-        start_step=start_step,
-        lr=args.lr,
-        save_freq=args.save_freq,
-        save_step_freq=args.save_step_freq,
-    )
-
-    if is_distributed and torch.distributed.is_initialized():
-        torch.distributed.destroy_process_group()
+    try:
+        # 6. Execute Stage 1 Training
+        trainer.train_stage1(
+            train_loader=train_loader,
+            val_loader=val_loader,
+            epochs=args.epochs,
+            start_epoch=start_epoch,
+            start_step=start_step,
+            lr=args.lr,
+            save_freq=args.save_freq,
+            save_step_freq=args.save_step_freq,
+        )
+    finally:
+        if is_distributed and torch.distributed.is_initialized():
+            torch.distributed.destroy_process_group()
 
 
 if __name__ == "__main__":

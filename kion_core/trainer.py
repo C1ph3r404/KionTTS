@@ -147,9 +147,19 @@ class KionProductionTrainer:
         self.gen_loss_fn = None
         self.disc_loss_fn = None
 
-        # AMP Scalers
-        self.scaler = torch.cuda.amp.GradScaler(enabled=self.use_amp)
-        self.scaler_d = torch.cuda.amp.GradScaler(enabled=self.use_amp)
+        # AMP Scalers (PyTorch 2.4+ compatibility)
+        if hasattr(torch.amp, "GradScaler"):
+            self.scaler = torch.amp.GradScaler("cuda", enabled=self.use_amp)
+            self.scaler_d = torch.amp.GradScaler("cuda", enabled=self.use_amp)
+        else:
+            self.scaler = torch.cuda.amp.GradScaler(enabled=self.use_amp)
+            self.scaler_d = torch.cuda.amp.GradScaler(enabled=self.use_amp)
+
+    def autocast(self):
+        """Context manager for automatic mixed precision across PyTorch versions."""
+        if hasattr(torch.amp, "autocast"):
+            return torch.amp.autocast("cuda", enabled=self.use_amp)
+        return torch.cuda.amp.autocast(enabled=self.use_amp)
 
     def activate_stage_modules(self, stage: str):
         """
@@ -204,7 +214,13 @@ class KionProductionTrainer:
         # 4. Wrap trainable modules in DDP if distributed
         if self.is_distributed:
             dev_idx = self.device.index if self.device.index is not None else 0
-            trainable_keys = ["predictor", "bert_encoder", "text_encoder"]
+            # Note: "predictor" (ProsodyPredictor) executes in two separate passes:
+            # forward() for duration/alignment and F0Ntrain() for pitch/energy.
+            # Wrapping "predictor" directly in DDP causes PyTorch DDP to mark variables ready twice
+            # because parameters used exclusively in F0Ntrain are marked unused during forward().
+            # To prevent autograd conflicts, we keep predictor unwrapped from DDP and synchronize its
+            # gradients directly across ranks via all_reduce before optimizer steps.
+            trainable_keys = ["bert_encoder", "text_encoder"]
             if stage == "stage1":
                 if "bert" in self.model and self.model["bert"] is not None:
                     trainable_keys.append("bert")
@@ -230,6 +246,11 @@ class KionProductionTrainer:
                     output_device=dev_idx,
                     find_unused_parameters=True,
                 )
+
+            # Ensure predictor parameters are synchronized across ranks at stage start
+            if "predictor" in self.model and self.model["predictor"] is not None:
+                for param in self.model["predictor"].parameters():
+                    torch.distributed.broadcast(param.data, src=0)
 
         # 5. Initialize GAN losses only when discriminators are active on GPU
         if stage == "stage2" and "mpd" in self.model and "msd" in self.model:
@@ -482,7 +503,7 @@ class KionProductionTrainer:
 
                 mel_input_length = output_lengths // 2
 
-                with torch.cuda.amp.autocast(enabled=self.use_amp):
+                with self.autocast():
                     # 1. Ground-Truth Acoustic & Prosodic Style Extraction
                     with torch.no_grad():
                         s_acoustic_gt = self.model["style_encoder"](ref_mels.unsqueeze(1))
@@ -559,6 +580,13 @@ class KionProductionTrainer:
                     self.scaler.unscale_(self.opt_pred)
                     if self.opt_bert:
                         self.scaler.unscale_(self.opt_bert)
+
+                    # Explicitly synchronize predictor gradients across distributed ranks
+                    if self.is_distributed and "predictor" in self.model and self.model["predictor"] is not None:
+                        for p in self.model["predictor"].parameters():
+                            if p.grad is not None:
+                                torch.distributed.all_reduce(p.grad.data, op=torch.distributed.ReduceOp.SUM)
+                                p.grad.data.div_(self.world_size)
 
                     torch.nn.utils.clip_grad_norm_(self.tag_encoder.parameters(), max_norm=5.0)
                     torch.nn.utils.clip_grad_norm_(self.opt_pred.param_groups[0]["params"], max_norm=5.0)
@@ -775,7 +803,7 @@ class KionProductionTrainer:
                 mel_input_length = output_lengths // 2
 
                 # ── Step A: Predictor & Style Forward ──
-                with torch.cuda.amp.autocast(enabled=self.use_amp):
+                with self.autocast():
                     with torch.no_grad():
                         s_acoustic_gt = self.model["style_encoder"](ref_mels.unsqueeze(1))
                         s_prosody_gt = self.model["predictor_encoder"](ref_mels.unsqueeze(1))
@@ -855,7 +883,7 @@ class KionProductionTrainer:
                     F0_real = extract_f0_safe(self.model["pitch_extractor"], gt_sub.unsqueeze(1))
                     N_real = compute_energy_norm(gt_sub)
 
-                with torch.cuda.amp.autocast(enabled=self.use_amp):
+                with self.autocast():
                     F0_pred, N_pred = self.model["predictor"].F0Ntrain(p_sub, cond_style)
                     y_rec = self.model["decoder"](en_sub, F0_pred, N_pred, ref_sub)
 
@@ -879,7 +907,7 @@ class KionProductionTrainer:
                 # ── Step D: Discriminator Backward & Accumulation ──
                 loss_d_total = torch.tensor(0.0, device=self.device)
                 if self.disc_loss_fn and self.opt_disc:
-                    with torch.cuda.amp.autocast(enabled=self.use_amp):
+                    with self.autocast():
                         loss_d_total = self.disc_loss_fn(y_real, y_rec.detach()) / self.accum_steps
                     self.scaler_d.scale(loss_d_total).backward()
 
@@ -888,6 +916,13 @@ class KionProductionTrainer:
                     self.scaler.unscale_(self.opt_pred)
                     if self.opt_dec:
                         self.scaler.unscale_(self.opt_dec)
+
+                    # Explicitly synchronize predictor gradients across distributed ranks
+                    if self.is_distributed and "predictor" in self.model and self.model["predictor"] is not None:
+                        for p in self.model["predictor"].parameters():
+                            if p.grad is not None:
+                                torch.distributed.all_reduce(p.grad.data, op=torch.distributed.ReduceOp.SUM)
+                                p.grad.data.div_(self.world_size)
 
                     torch.nn.utils.clip_grad_norm_(self.tag_encoder.parameters(), max_norm=5.0)
                     torch.nn.utils.clip_grad_norm_(self.opt_pred.param_groups[0]["params"], max_norm=5.0)
