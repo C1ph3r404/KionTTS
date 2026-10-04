@@ -122,7 +122,7 @@ def build_ood_texts(output_path: str):
 
 def climb_to_dataset_root(path: str) -> str:
     """
-    If path points to a leaf batch or tier directory (e.g. batch_1063 or Tier3),
+    If path points to a leaf batch or tier directory (e.g. batch_0000, Tier3, or Batch0-150),
     climb up the folder hierarchy until reaching the dataset root.
     """
     if not path or os.path.isfile(path):
@@ -145,72 +145,102 @@ def climb_to_dataset_root(path: str) -> str:
 
 
 def discover_dataset_source(explicit_path: Optional[str] = None) -> str:
-    """Auto-discovers the dataset root source across Kaggle input, tar files, or directories."""
+    """
+    Auto-discovers the dataset root source across:
+      1. Explicit path (if provided)
+      2. /kaggle/input (recursive search for sample dataset or main dataset)
+      3. Local workspace folders (DATASETS, tts_dataset, sample_dataset, DataSet/data, DataSet/sample_kion)
+    Supports both:
+      - Main dataset format: DATASETS / tts_dataset / ... / batch_XXXX or kion_dataset.tar
+      - Sample dataset format: sample_dataset / sample_kion with train_manifest.json + wavs
+    """
     if explicit_path and os.path.exists(explicit_path):
         return climb_to_dataset_root(explicit_path)
 
-    # Candidate locations
-    candidates = [
-        # Local workspace
-        "DataSet/data/kion_dataset.tar",
-        "DataSet/data",
-        "DataSet",
-        # Kaggle input paths
-        "/kaggle/input/tts-dataset",
-        "/kaggle/input/tts_dataset",
-        "/kaggle/input/kion-dataset",
-        "/kaggle/input/kiontts",
-        "/kaggle/input/kiontts-dataset",
-        "/kaggle/input/kion_dataset",
-        "/kaggle/input/kion-dataset/kion_dataset.tar",
-        "/kaggle/input/kiontts/DataSet/data/kion_dataset.tar",
-    ]
-
-    for cand in candidates:
-        if os.path.exists(cand):
-            if os.path.isdir(cand):
-                contents = os.listdir(cand)
-                if contents:
-                    return climb_to_dataset_root(cand)
-            else:
-                return cand
-
-    # Scan /kaggle/input dynamically
+    search_roots = []
     if os.path.exists("/kaggle/input"):
-        # 0. Check for pre-existing train_manifest.json (recursive)
-        manifest_matches = [
-            m for m in glob.glob("/kaggle/input/**/train_manifest.json", recursive=True)
-            if os.path.getsize(m) > 10
+        search_roots.append("/kaggle/input")
+
+    # Local workspace search candidates
+    local_candidates = [
+        "DATASETS",
+        "tts_dataset",
+        "DataSet/data",
+        "sample_dataset",
+        "DataSet/sample_kion",
+        "DataSet",
+        ".",
+        "..",
+        "/kaggle/working",
+        "/content",
+    ]
+    for p in local_candidates:
+        abs_p = os.path.abspath(p)
+        if os.path.exists(abs_p) and abs_p not in search_roots:
+            search_roots.append(abs_p)
+
+    out_manifest = os.path.abspath("DataSet/train_manifest.json")
+    out_dir = os.path.abspath("DataSet")
+
+    # Scan search roots in order of precedence
+    for sdir in search_roots:
+        is_kaggle = sdir.startswith("/kaggle/input")
+        prefix = "[Kaggle Input]" if is_kaggle else "[Local Workspace]"
+
+        # 1. Check for Sample Dataset (train_manifest.json + wavs)
+        sample_manifests = glob.glob(os.path.join(sdir, "**", "train_manifest.json"), recursive=True)
+        for m in sample_manifests:
+            m_abs = os.path.abspath(m)
+            if m_abs == out_manifest or os.path.dirname(m_abs) == out_dir:
+                continue
+            if os.path.getsize(m_abs) > 10:
+                sample_root = os.path.dirname(m)
+                print(f"[✓] {prefix} Discovered Sample Dataset at: {sample_root}")
+                return sample_root
+
+        # 2. Check for Main Dataset extracted batch folders (metadata.json in batch/tier folders)
+        meta_files = glob.glob(os.path.join(sdir, "**", "metadata.json"), recursive=True)
+        valid_metas = [
+            m for m in meta_files
+            if any(k in m.lower() for k in ["batch", "tier", "kion", "tts"])
+            and not os.path.abspath(m).startswith(out_dir)
         ]
-        if manifest_matches:
-            return os.path.dirname(manifest_matches[0])
+        if valid_metas:
+            main_root = climb_to_dataset_root(os.path.dirname(valid_metas[0]))
+            print(f"[✓] {prefix} Discovered Main Dataset extracted folder ({len(valid_metas)} metadata.json files). Root: {main_root}")
+            return main_root
 
-        # 1. Check for tar archive
-        tars = glob.glob("/kaggle/input/**/kion_dataset.tar", recursive=True) or \
-               glob.glob("/kaggle/input/**/*.tar", recursive=True)
-        if tars:
-            return tars[0]
+        # 3. Check for Main Dataset batch zips (batch_*.zip)
+        batch_zips = glob.glob(os.path.join(sdir, "**", "batch_*.zip"), recursive=True)
+        if batch_zips:
+            main_root = climb_to_dataset_root(os.path.dirname(batch_zips[0]))
+            print(f"[✓] {prefix} Discovered Main Dataset batch zips ({len(batch_zips)} zips). Root: {main_root}")
+            return main_root
 
-        # 2. Check for master split zips
-        master_zips = glob.glob("/kaggle/input/**/KionTTS_Dataset_*.zip", recursive=True)
+        # 4. Check for Main Dataset tar archives (kion_dataset.tar)
+        for pat in ["kion_dataset.tar", "*.tar", "*.tar.gz", "*.tgz"]:
+            for t in glob.glob(os.path.join(sdir, "**", pat), recursive=True):
+                if os.path.getsize(t) > 1024:
+                    t_lower = os.path.basename(t).lower()
+                    if any(k in t_lower for k in ["kion", "tts", "dataset"]):
+                        print(f"[✓] {prefix} Discovered Dataset tar archive at: {t}")
+                        return t
+
+        # 5. Check for Master split zips (KionTTS_Dataset_train.zip)
+        master_zips = glob.glob(os.path.join(sdir, "**", "KionTTS_Dataset_*.zip"), recursive=True)
         if master_zips:
-            common_zip = os.path.commonpath(master_zips)
-            return common_zip if os.path.isdir(common_zip) else os.path.dirname(common_zip)
+            main_root = climb_to_dataset_root(os.path.dirname(master_zips[0]))
+            print(f"[✓] {prefix} Discovered Master split zips. Root: {main_root}")
+            return main_root
 
-        # 3. Check for extracted metadata.json files across batch directories
-        meta_files = glob.glob("/kaggle/input/**/metadata.json", recursive=True)
-        if meta_files:
-            common_root = os.path.commonpath(meta_files)
-            if os.path.isfile(common_root):
-                common_root = os.path.dirname(common_root)
-            return climb_to_dataset_root(common_root)
-
-        # 4. Fallback search by folder names
-        for root, dirs, files in os.walk("/kaggle/input"):
+        # 6. Fallback directory matching
+        for root, dirs, _ in os.walk(sdir):
             for d in dirs:
-                if any(k in d.lower() for k in ["tts", "kion", "dataset"]):
+                d_lower = d.lower()
+                if any(k in d_lower for k in ["tts_dataset", "tts-dataset", "sample_dataset", "sample_kion", "sample-kion"]):
                     cand_dir = os.path.join(root, d)
                     if os.path.isdir(cand_dir) and len(os.listdir(cand_dir)) > 0:
+                        print(f"[✓] {prefix} Discovered Dataset directory by name: {cand_dir}")
                         return cand_dir
 
     raise FileNotFoundError("Could not auto-discover KionTTS dataset in workspace or /kaggle/input.")
@@ -571,7 +601,47 @@ def prepare_kion_dataset(
                                     max_samples=max_samples,
                                 )
 
-        # Sub-case 2B: Pre-extracted directories with loose metadata.json files (Kaggle auto-unpacked)
+        # Sub-case 2C: Check for standalone sub-batch zips (e.g. batch_0000.zip)
+        sub_batch_zips = [z for z in master_zips if "batch_" in os.path.basename(z).lower()]
+        if sub_batch_zips and len(manifests["train"]) == 0:
+            print(f"    Found {len(sub_batch_zips)} sub-batch zip archives.")
+            for b_path in sub_batch_zips:
+                split_key = "val" if any(v in b_path.lower() for v in ["val", "eval", "test"]) else "train"
+                if max_samples and len(manifests[split_key]) >= max_samples:
+                    continue
+                try:
+                    with zipfile.ZipFile(b_path, "r") as bz:
+                        meta_item = None
+                        for fname in bz.namelist():
+                            if fname.endswith("metadata.json"):
+                                meta_item = json.loads(bz.read(fname).decode("utf-8"))
+                                break
+                        if not meta_item:
+                            continue
+                        audio_map = {
+                            os.path.splitext(os.path.basename(f))[0]: f
+                            for f in bz.namelist() if f.endswith(".wav")
+                        }
+                        def get_wav_fn(uid, _amap=audio_map, _bz=bz):
+                            clean_id = uid[:-4] if uid.lower().endswith(".wav") else uid
+                            if clean_id in _amap:
+                                return _bz.read(_amap[clean_id])
+                            return None
+
+                        process_entries(
+                            meta_items=meta_item,
+                            get_wav_bytes_or_path_fn=get_wav_fn,
+                            wav_dir=wav_dir,
+                            manifest_records=manifests[split_key],
+                            style_text_list=style_text_lists[split_key],
+                            phonemizer_obj=phonemizer_obj,
+                            seen_ids=seen_ids,
+                            max_samples=max_samples,
+                        )
+                except Exception as e:
+                    print(f"[-] Warning: Failed to process batch zip {b_path}: {e}")
+
+        # Sub-case 2D: Pre-extracted directories with loose metadata.json files (Kaggle auto-unpacked)
         loose_metas = glob.glob(os.path.join(source_path, "**", "metadata.json"), recursive=True)
         if loose_metas:
             print(f"    Found {len(loose_metas)} extracted metadata.json files on disk.")
