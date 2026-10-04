@@ -269,7 +269,7 @@ class KionProductionTrainer:
                             self.model[k],
                             device_ids=[dev_idx],
                             output_device=dev_idx,
-                            find_unused_parameters=True,
+                            find_unused_parameters=False,
                         )
 
             if not isinstance(self.tag_encoder, torch.nn.parallel.DistributedDataParallel):
@@ -277,7 +277,7 @@ class KionProductionTrainer:
                     self.tag_encoder,
                     device_ids=[dev_idx],
                     output_device=dev_idx,
-                    find_unused_parameters=True,
+                    find_unused_parameters=False,
                 )
 
             # Ensure predictor parameters are synchronized across ranks at stage start
@@ -584,7 +584,7 @@ class KionProductionTrainer:
                     d_en_f32 = d_en.float()
 
                 # Predictor forward and loss in FP32
-                with torch.cuda.amp.autocast(enabled=False):
+                with torch.amp.autocast('cuda', enabled=False):
                     d, p = self.model["predictor"](d_en_f32, cond_style_f32, input_lengths, s2s_attn_mono.float(), text_mask)
                     F0_pred, N_pred = self.model["predictor"].F0Ntrain(p, cond_style_f32)
 
@@ -601,10 +601,16 @@ class KionProductionTrainer:
                         _text_input = _text_input[:_tl].long()
                         cols_idx = torch.arange(_s2s_pred.size(1), device=_s2s_pred.device).unsqueeze(0)
                         _s2s_trg = (cols_idx < _text_input.unsqueeze(1)).float()
-                        _dur_pred = torch.sigmoid(_s2s_pred).sum(axis=1)
+                        # Clamp logits to prevent overflow → NaN in BCE during early training
+                        _s2s_pred_clamped = torch.clamp(_s2s_pred, min=-15.0, max=15.0)
+                        _dur_pred = torch.sigmoid(_s2s_pred_clamped).sum(axis=1)
                         if _tl > 2:
-                            loss_dur = loss_dur + F.l1_loss(_dur_pred[1:_tl-1], _text_input[1:_tl-1].float())
-                        loss_ce = loss_ce + F.binary_cross_entropy_with_logits(_s2s_pred.flatten(), _s2s_trg.flatten())
+                            _dur_loss_item = F.l1_loss(_dur_pred[1:_tl-1], _text_input[1:_tl-1].float())
+                            if torch.isfinite(_dur_loss_item):
+                                loss_dur = loss_dur + _dur_loss_item
+                        _ce_item = F.binary_cross_entropy_with_logits(_s2s_pred_clamped.flatten(), _s2s_trg.flatten())
+                        if torch.isfinite(_ce_item):
+                            loss_ce = loss_ce + _ce_item
                     loss_dur = (loss_dur + loss_ce) / max(1, texts.size(0))
 
                     loss_predictor = loss_f0 + loss_norm + loss_dur
