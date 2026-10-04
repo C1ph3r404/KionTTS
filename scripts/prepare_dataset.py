@@ -20,6 +20,12 @@ import tarfile
 import argparse
 from typing import Dict, List, Any, Optional
 
+try:
+    from tqdm import tqdm
+except ImportError:
+    def tqdm(iterable, *args, **kwargs):
+        return iterable
+
 EMOTIONS = [
     "angry", "annoyed", "bored", "concerned", "confused",
     "curious", "disappointed", "excited", "frustrated", "happy",
@@ -403,7 +409,8 @@ def prepare_kion_dataset(
                 batch_names = [n for n in master_zip.namelist() if n.endswith(".zip")]
                 print(f"    Found {len(batch_names)} batch archives in {z_name}.")
 
-                for b_name in batch_names:
+                pbar = tqdm(batch_names, desc=f"[*] Processing {split_key.upper()} batches ({z_name})", unit="batch")
+                for b_name in pbar:
                     if max_samples and len(manifests[split_key]) >= max_samples:
                         break
                     bz = zipfile.ZipFile(io.BytesIO(master_zip.read(b_name)))
@@ -435,6 +442,7 @@ def prepare_kion_dataset(
                         seen_ids=seen_ids,
                         max_samples=max_samples,
                     )
+                    pbar.set_postfix({"samples": len(manifests[split_key])})
 
     # ─────────────────────────────────────────────────────────────────────────
     # CASE 2: Source is a Directory (Kaggle extracted directory or local folder)
@@ -514,7 +522,8 @@ def prepare_kion_dataset(
 
             # Rebuild style text lists and ensure clean_text, phonemes & tag_vector exist on every item
             for split_name in ["train", "val"]:
-                for item in manifests[split_name]:
+                pbar = tqdm(manifests[split_name], desc=f"[*] Generating {split_name}_list", unit="sample")
+                for item in pbar:
                     uid = item.get("id") or os.path.splitext(os.path.basename(item.get("wav_path", "")))[0]
                     item["id"] = uid
                     if not item.get("clean_text"):
@@ -605,7 +614,8 @@ def prepare_kion_dataset(
         sub_batch_zips = [z for z in master_zips if "batch_" in os.path.basename(z).lower()]
         if sub_batch_zips and len(manifests["train"]) == 0:
             print(f"    Found {len(sub_batch_zips)} sub-batch zip archives.")
-            for b_path in sub_batch_zips:
+            pbar = tqdm(sub_batch_zips, desc="[*] Processing batch zips", unit="batch")
+            for b_path in pbar:
                 split_key = "val" if any(v in b_path.lower() for v in ["val", "eval", "test"]) else "train"
                 if max_samples and len(manifests[split_key]) >= max_samples:
                     continue
@@ -638,6 +648,7 @@ def prepare_kion_dataset(
                             seen_ids=seen_ids,
                             max_samples=max_samples,
                         )
+                        pbar.set_postfix({"train": len(manifests["train"]), "val": len(manifests["val"])})
                 except Exception as e:
                     print(f"[-] Warning: Failed to process batch zip {b_path}: {e}")
 
@@ -645,7 +656,8 @@ def prepare_kion_dataset(
         loose_metas = glob.glob(os.path.join(source_path, "**", "metadata.json"), recursive=True)
         if loose_metas:
             print(f"    Found {len(loose_metas)} extracted metadata.json files on disk.")
-            for meta_path in loose_metas:
+            pbar = tqdm(loose_metas, desc="[*] Processing batch metadata & generating lists", unit="batch")
+            for meta_path in pbar:
                 meta_lower = meta_path.lower()
                 if "train" in meta_lower:
                     split_key = "train"
