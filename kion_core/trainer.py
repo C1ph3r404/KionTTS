@@ -73,26 +73,71 @@ class KionProductionTrainer:
         os.makedirs(self.log_dir, exist_ok=True)
         self.writer = SummaryWriter(self.log_dir)
 
-        # Move modules to target device
-        for k, mod in self.model.items():
-            if mod is not None and hasattr(mod, "to"):
-                mod.to(self.device)
-        self.tag_encoder.to(self.device)
-
-        # Build loss modules
+        # Build base losses
         self.stft_loss = MultiResolutionSTFTLoss().to(self.device)
         self.style_loss_fn = KionStyleAlignmentLoss(lambda_cos=1.0, lambda_reg=0.01).to(self.device)
+        self.gen_loss_fn = None
+        self.disc_loss_fn = None
 
-        if "mpd" in self.model and "msd" in self.model:
+        # AMP Scalers
+        self.scaler = torch.cuda.amp.GradScaler(enabled=self.use_amp)
+        self.scaler_d = torch.cuda.amp.GradScaler(enabled=self.use_amp)
+
+    def activate_stage_modules(self, stage: str):
+        """
+        Dynamically manages GPU memory by loading ONLY the modules needed for the active stage.
+        Unused modules are offloaded to CPU RAM, and GPU memory cache is cleared.
+        """
+        import gc
+        if stage == "stage1":
+            active_modules = [
+                "predictor", "bert", "bert_encoder", "text_encoder",
+                "style_encoder", "predictor_encoder", "pitch_extractor"
+            ]
+            offload_modules = ["decoder", "mpd", "msd", "diffusion", "wd"]
+        elif stage == "stage2":
+            active_modules = [
+                "predictor", "bert", "bert_encoder", "text_encoder",
+                "style_encoder", "predictor_encoder", "decoder", "mpd", "msd"
+            ]
+            offload_modules = ["diffusion", "wd", "pitch_extractor"]
+        else:
+            active_modules = list(self.model.keys())
+            offload_modules = []
+
+        print(f"[*] Dynamically configuring GPU memory for [{stage}]...")
+        # 1. Offload unused modules to CPU RAM first
+        for k in offload_modules:
+            if k in self.model and self.model[k] is not None and hasattr(self.model[k], "to"):
+                self.model[k].to("cpu")
+                if hasattr(self.model[k], "eval"):
+                    self.model[k].eval()
+                for p in self.model[k].parameters():
+                    p.requires_grad = False
+
+        # 2. Flush GPU VRAM cache
+        if self.device.type == "cuda":
+            gc.collect()
+            torch.cuda.empty_cache()
+
+        # 3. Move active modules to GPU
+        for k in active_modules:
+            if k in self.model and self.model[k] is not None and hasattr(self.model[k], "to"):
+                self.model[k].to(self.device)
+        self.tag_encoder.to(self.device)
+
+        # 4. Initialize GAN losses only when discriminators are active on GPU
+        if stage == "stage2" and "mpd" in self.model and "msd" in self.model:
             self.gen_loss_fn = GeneratorLoss(self.model["mpd"], self.model["msd"]).to(self.device)
             self.disc_loss_fn = DiscriminatorLoss(self.model["mpd"], self.model["msd"]).to(self.device)
         else:
             self.gen_loss_fn = None
             self.disc_loss_fn = None
 
-        # AMP Scalers
-        self.scaler = torch.cuda.amp.GradScaler(enabled=self.use_amp)
-        self.scaler_d = torch.cuda.amp.GradScaler(enabled=self.use_amp)
+        if self.device.type == "cuda":
+            allocated_mb = torch.cuda.memory_allocated(self.device) / (1024 * 1024)
+            reserved_mb = torch.cuda.memory_reserved(self.device) / (1024 * 1024)
+            print(f"[✓] Active GPU VRAM for [{stage}]: {allocated_mb:.1f} MB allocated ({reserved_mb:.1f} MB reserved)")
 
     def _build_optimizers(self, stage: str, lr: float = 1e-4):
         """Builds decoupled optimizers for generator submodules and discriminators."""
@@ -160,6 +205,7 @@ class KionProductionTrainer:
         print(f"  Mixed Precision    : {'AMP FP16' if self.use_amp else 'FP32'}")
         print("=" * 65 + "\n")
 
+        self.activate_stage_modules(stage="stage1")
         self._build_optimizers(stage="stage1", lr=lr)
 
         # Ensure reference modules are in eval mode
@@ -256,13 +302,11 @@ class KionProductionTrainer:
 
                     self.scaler.step(self.opt_tag)
                     self.scaler.step(self.opt_pred)
-                    if self.opt_bert:
-                        self.scaler.step(self.opt_bert)
-                        self.opt_bert.zero_grad()
-
                     self.scaler.update()
-                    self.opt_tag.zero_grad()
-                    self.opt_pred.zero_grad()
+                    self.opt_tag.zero_grad(set_to_none=True)
+                    self.opt_pred.zero_grad(set_to_none=True)
+                    if self.opt_bert:
+                        self.opt_bert.zero_grad(set_to_none=True)
 
                 total_style_loss += loss_style.item()
                 total_pred_loss += loss_predictor.item()
@@ -381,6 +425,7 @@ class KionProductionTrainer:
         print(f"  Device             : {self.device}")
         print("=" * 65 + "\n")
 
+        self.activate_stage_modules(stage="stage2")
         self._build_optimizers(stage="stage2", lr=lr)
 
         # Unfreeze decoder & discriminators for fine-tuning
@@ -515,11 +560,15 @@ class KionProductionTrainer:
                 if self.opt_dec:
                     self.scaler.step(self.opt_dec)
                 self.scaler.update()
+                self.opt_tag.zero_grad(set_to_none=True)
+                self.opt_pred.zero_grad(set_to_none=True)
+                if self.opt_dec:
+                    self.opt_dec.zero_grad(set_to_none=True)
 
                 # ── Step D: Discriminator Backward & Step ──
                 loss_d_total = torch.tensor(0.0, device=self.device)
                 if self.disc_loss_fn and self.opt_disc:
-                    self.opt_disc.zero_grad()
+                    self.opt_disc.zero_grad(set_to_none=True)
                     with torch.cuda.amp.autocast(enabled=self.use_amp):
                         loss_d_total = self.disc_loss_fn(y_real, y_rec.detach())
 
@@ -528,6 +577,7 @@ class KionProductionTrainer:
                     torch.nn.utils.clip_grad_norm_(self.opt_disc.param_groups[0]["params"], max_norm=5.0)
                     self.scaler_d.step(self.opt_disc)
                     self.scaler_d.update()
+                    self.opt_disc.zero_grad(set_to_none=True)
 
                 total_stft_loss += loss_stft.item()
                 total_gen_loss += loss_gen.item()
