@@ -27,9 +27,6 @@ DataSet/*.zip
 *.tar.gz
 *.zip
 
-# Official unmodified StyleTTS2
-StyleTTS2/
-
 # Jupyter / IPython
 .ipynb_checkpoints/
 */.ipynb_checkpoints/*

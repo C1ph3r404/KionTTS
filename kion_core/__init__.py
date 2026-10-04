@@ -14,5 +14,14 @@ torch.load = _safe_torch_load
 
 from .tag_style_encoder import KionTagStyleEncoder, compute_kion_style_loss
 from .dataset import KionManifestDataset, KionCollater, build_kion_dataloader
+from .losses import (
+    MultiResolutionSTFTLoss,
+    GeneratorLoss,
+    DiscriminatorLoss,
+    KionStyleAlignmentLoss,
+    WavLMLoss,
+)
+from .checkpoint_manager import KionCheckpointManager, get_hf_token
+from .trainer import KionProductionTrainer
 from .synthesizer import KionSynthesizer, parse_inline_prompt
 from .export import export_kion_model

@@ -110,6 +110,3 @@ There were two coupled causes that triggered at `joint_epoch = 50`:
           del model[unused_k]
   ```
 * **Purge VRAM at cell entry**: Explicitly call `gc.collect()` and `torch.cuda.empty_cache()` before starting training pipelines in notebook cells.
-
-
-
