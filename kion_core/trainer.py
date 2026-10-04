@@ -566,7 +566,9 @@ class KionProductionTrainer:
 
                         d_gt = s2s_attn_mono.sum(axis=-1).detach()
                         F0_real = extract_f0_safe(self.model["pitch_extractor"], mels.unsqueeze(1))
+                        F0_real = torch.nan_to_num(F0_real, nan=0.0, posinf=0.0, neginf=0.0)
                         N_real = compute_energy_norm(mels)
+                        N_real = torch.nan_to_num(N_real, nan=0.0, posinf=0.0, neginf=0.0)
 
                     # 2. Tag Style Encoder Forward & Grounded Loss
                     s_tag = self.tag_encoder(tag_vectors)  # (B, 256)
@@ -576,29 +578,32 @@ class KionProductionTrainer:
                     bert_dur = self.model["bert"](texts, attention_mask=(~text_mask).int())
                     d_en = self.model["bert_encoder"](bert_dur).transpose(-1, -2)
 
-                    # 4. Prosody Prediction Loss
-                    # Alternate ground truth style and tag style to smoothly ground conditioning
+                    # 4. Prosody Prediction Loss (Computed in FP32 to prevent LSTM FP16 overflow)
                     cond_style = s_tag[:, 128:] if (step % 2 == 0) else s_prosody_gt
-                    d, p = self.model["predictor"](d_en, cond_style, input_lengths, s2s_attn_mono, text_mask)
+                    cond_style_f32 = cond_style.float()
+                    d_en_f32 = d_en.float()
 
-                    # Aligned prosodic features p has shape (B, 640, mel_input_length)
-                    # F0Ntrain upsamples by 2x to (B, output_lengths), exactly matching F0_real and N_real
-                    F0_pred, N_pred = self.model["predictor"].F0Ntrain(p, cond_style)
+                # Predictor forward and loss in FP32
+                with torch.cuda.amp.autocast(enabled=False):
+                    d, p = self.model["predictor"](d_en_f32, cond_style_f32, input_lengths, s2s_attn_mono.float(), text_mask)
+                    F0_pred, N_pred = self.model["predictor"].F0Ntrain(p, cond_style_f32)
 
-                    # Predictor Losses
-                    loss_f0 = F.smooth_l1_loss(F0_pred, F0_real)
-                    loss_norm = F.smooth_l1_loss(N_pred, N_real)
+                    # Predictor Losses (StyleTTS2 divides F0 loss by 10 to balance raw Hz scale)
+                    loss_f0 = F.smooth_l1_loss(F0_pred, F0_real.float()) / 10.0
+                    loss_norm = F.smooth_l1_loss(N_pred, N_real.float())
 
-                    # StyleTTS2 Duration & CE loss (vectorized across phoneme tokens)
-                    loss_dur = 0.0
-                    loss_ce = 0.0
+                    # StyleTTS2 Duration & CE loss with short text boundary protection
+                    loss_dur = torch.tensor(0.0, device=self.device)
+                    loss_ce = torch.tensor(0.0, device=self.device)
                     for _s2s_pred, _text_input, _text_length in zip(d, d_gt, input_lengths):
-                        _s2s_pred = _s2s_pred[:_text_length, :]
-                        _text_input = _text_input[:_text_length].long()
+                        _tl = int(_text_length.item())
+                        _s2s_pred = _s2s_pred[:_tl, :]
+                        _text_input = _text_input[:_tl].long()
                         cols_idx = torch.arange(_s2s_pred.size(1), device=_s2s_pred.device).unsqueeze(0)
                         _s2s_trg = (cols_idx < _text_input.unsqueeze(1)).float()
                         _dur_pred = torch.sigmoid(_s2s_pred).sum(axis=1)
-                        loss_dur = loss_dur + F.l1_loss(_dur_pred[1:_text_length-1], _text_input[1:_text_length-1].float())
+                        if _tl > 2:
+                            loss_dur = loss_dur + F.l1_loss(_dur_pred[1:_tl-1], _text_input[1:_tl-1].float())
                         loss_ce = loss_ce + F.binary_cross_entropy_with_logits(_s2s_pred.flatten(), _s2s_trg.flatten())
                     loss_dur = (loss_dur + loss_ce) / max(1, texts.size(0))
 
@@ -606,6 +611,16 @@ class KionProductionTrainer:
 
                     # Combined Step Loss
                     loss_step = (loss_style * 2.0 + loss_predictor) / self.accum_steps
+
+                # NaN/Inf guard: skip step if invalid to preserve model parameters
+                if torch.isnan(loss_step) or torch.isinf(loss_step):
+                    if self.is_main_process:
+                        print(f"  [!] Notice: NaN/Inf detected at step {step+1}. Skipping optimizer update.")
+                    self.opt_tag.zero_grad(set_to_none=True)
+                    self.opt_pred.zero_grad(set_to_none=True)
+                    if self.opt_bert:
+                        self.opt_bert.zero_grad(set_to_none=True)
+                    continue
 
                 # Backward pass with no_sync during accumulation steps
                 is_accumulating = ((step + 1) % self.accum_steps != 0) and ((step + 1) != max_steps_this_epoch)
@@ -934,7 +949,9 @@ class KionProductionTrainer:
 
                 with torch.no_grad():
                     F0_real = extract_f0_safe(self.model["pitch_extractor"], gt_sub.unsqueeze(1))
+                    F0_real = torch.nan_to_num(F0_real, nan=0.0, posinf=0.0, neginf=0.0)
                     N_real = compute_energy_norm(gt_sub)
+                    N_real = torch.nan_to_num(N_real, nan=0.0, posinf=0.0, neginf=0.0)
 
                 with self.autocast():
                     F0_pred, N_pred = self.model["predictor"].F0Ntrain(p_sub, cond_style)
