@@ -106,7 +106,7 @@ def main():
         print(f"[✓] Resuming Stage 2 from epoch {start_epoch}, step {start_step}...")
 
         if start_epoch >= args.epochs:
-            print(f"[✓] Stage 2 target of {args.epochs} epochs has already been completed (found checkpoint at epoch {start_epoch}). Fast-forwarding past Stage 2!")
+            print(f"[✓] Stage 2 target of {args.epochs} epochs has already been completed (found checkpoint at epoch {start_epoch}). Exiting Stage 2.")
             return
     else:
         # Load weights from Stage 1

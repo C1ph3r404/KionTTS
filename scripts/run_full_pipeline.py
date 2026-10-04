@@ -69,7 +69,7 @@ def main():
             meta = s1_mgr.load_checkpoint(latest_s1, models={}, load_optimizers=False)
             if meta.get("epoch", 0) >= args.stage1_epochs:
                 s1_done = True
-                print(f"[✓] Stage 1 already completed ({meta.get('epoch', 0)}/{args.stage1_epochs} epochs). Fast-forwarding directly to Stage 2!")
+                print(f"[✓] Stage 1 already completed ({meta.get('epoch', 0)}/{args.stage1_epochs} epochs). Proceeding directly to Stage 2.")
 
         if not s1_done:
             cmd_s1 = (

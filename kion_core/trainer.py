@@ -247,15 +247,16 @@ class KionProductionTrainer:
                 self.opt_bert.zero_grad()
 
             batches_in_epoch = len(train_loader)
-            skip_steps = 0
+            max_steps_this_epoch = batches_in_epoch
             if epoch == start_epoch and start_step > 0:
-                skip_steps = start_step % batches_in_epoch
-                if skip_steps > 0:
-                    print(f"[*] Fast-forwarding dataloader: Resuming at step {global_step} (skipping first {skip_steps}/{batches_in_epoch} batches of epoch {epoch+1})...")
+                steps_done_in_epoch = start_step % batches_in_epoch
+                if steps_done_in_epoch > 0:
+                    max_steps_this_epoch = batches_in_epoch - steps_done_in_epoch
+                    print(f"[*] Resuming mid-epoch: executing remaining {max_steps_this_epoch} steps to complete Epoch {epoch+1} (Global step {global_step})...")
 
             for step, batch in enumerate(train_loader):
-                if step < skip_steps:
-                    continue
+                if step >= max_steps_this_epoch:
+                    break
 
                 waves, texts, input_lengths, mels, output_lengths, ref_mels, tag_vectors, paths = batch
 
@@ -359,7 +360,7 @@ class KionProductionTrainer:
 
                 if step % 20 == 0:
                     print(
-                        f"Epoch [{epoch+1:02d}/{epochs}] Step [{step:03d}/{len(train_loader)}] "
+                        f"Epoch [{epoch+1:02d}/{epochs}] Step [{step+1:03d}/{max_steps_this_epoch}] (Global: {global_step}) "
                         f"StyleLoss: {loss_style.item():.4f} | "
                         f"F0Loss: {loss_f0.item():.4f} | "
                         f"NormLoss: {loss_norm.item():.4f} | "
@@ -477,15 +478,16 @@ class KionProductionTrainer:
             num_batches = 0
 
             batches_in_epoch = len(train_loader)
-            skip_steps = 0
+            max_steps_this_epoch = batches_in_epoch
             if epoch == start_epoch and start_step > 0:
-                skip_steps = start_step % batches_in_epoch
-                if skip_steps > 0:
-                    print(f"[*] Fast-forwarding dataloader: Resuming at step {global_step} (skipping first {skip_steps}/{batches_in_epoch} batches of epoch {epoch+1})...")
+                steps_done_in_epoch = start_step % batches_in_epoch
+                if steps_done_in_epoch > 0:
+                    max_steps_this_epoch = batches_in_epoch - steps_done_in_epoch
+                    print(f"[*] Resuming mid-epoch: executing remaining {max_steps_this_epoch} steps to complete Epoch {epoch+1} (Global step {global_step})...")
 
             for step, batch in enumerate(train_loader):
-                if step < skip_steps:
-                    continue
+                if step >= max_steps_this_epoch:
+                    break
 
                 waves, texts, input_lengths, mels, output_lengths, ref_mels, tag_vectors, paths = batch
 
@@ -650,7 +652,7 @@ class KionProductionTrainer:
 
                 if step % 20 == 0:
                     print(
-                        f"Stage2 Epoch [{epoch+1:02d}/{epochs}] Step [{step:03d}/{len(train_loader)}] "
+                        f"Stage2 Epoch [{epoch+1:02d}/{epochs}] Step [{step+1:03d}/{max_steps_this_epoch}] (Global: {global_step}) "
                         f"STFTLoss: {loss_stft.item():.4f} | "
                         f"GenLoss: {loss_gen.item():.4f} | "
                         f"DiscLoss: {loss_d_total.item():.4f} | "

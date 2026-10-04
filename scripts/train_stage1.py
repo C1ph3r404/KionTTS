@@ -105,7 +105,7 @@ def main():
         print(f"[✓] Resuming Stage 1 from epoch {start_epoch}, step {start_step}...")
 
     if start_epoch >= args.epochs:
-        print(f"[✓] Stage 1 target of {args.epochs} epochs has already been completed (found checkpoint at epoch {start_epoch}). Fast-forwarding past Stage 1!")
+        print(f"[✓] Stage 1 target of {args.epochs} epochs has already been completed (found checkpoint at epoch {start_epoch}). Exiting Stage 1.")
         return
 
     # 4. Build DataLoaders
