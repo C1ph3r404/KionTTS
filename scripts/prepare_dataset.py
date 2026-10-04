@@ -452,27 +452,52 @@ def prepare_kion_dataset(
                 if wav_dirs:
                     src_wavs = wav_dirs[0]
 
-            if src_wavs and os.path.abspath(src_wavs) != os.path.abspath(wav_dir):
-                for w in os.listdir(src_wavs):
-                    if w.lower().endswith(".wav"):
-                        s_f = os.path.join(src_wavs, w)
-                        d_f = os.path.join(wav_dir, w)
-                        if os.path.islink(d_f) and not os.path.exists(d_f):
+            # Link wav files referenced in manifests into output wav_dir
+            for split_name in ["train", "val"]:
+                for item in manifests[split_name]:
+                    uid = item.get("id") or os.path.splitext(os.path.basename(item.get("wav_path", "")))[0]
+                    dest_f = os.path.join(wav_dir, f"{uid}.wav")
+                    if os.path.islink(dest_f) and not os.path.exists(dest_f):
+                        try:
+                            os.unlink(dest_f)
+                        except Exception:
+                            pass
+                    if not os.path.exists(dest_f):
+                        found_src = None
+                        for cand in [
+                            os.path.join(manifest_dir, item.get("wav_path", "")),
+                            os.path.join(manifest_dir, "wavs", f"{uid}.wav"),
+                            os.path.join(manifest_dir, f"{uid}.wav"),
+                            (os.path.join(src_wavs, f"{uid}.wav") if src_wavs else None),
+                            (os.path.join(src_wavs, item.get("wav_path", "")) if src_wavs else None),
+                            os.path.join(source_path, "wavs", f"{uid}.wav"),
+                            os.path.join(source_path, f"{uid}.wav"),
+                        ]:
+                            if cand and os.path.exists(cand):
+                                found_src = cand
+                                break
+                        if found_src:
                             try:
-                                os.unlink(d_f)
+                                os.symlink(os.path.abspath(found_src), dest_f)
                             except Exception:
-                                pass
-                        if not os.path.exists(d_f):
-                            try:
-                                os.symlink(os.path.abspath(s_f), d_f)
-                            except Exception:
-                                shutil.copy2(s_f, d_f)
+                                shutil.copy2(found_src, dest_f)
 
-            # Rebuild style text lists
-            for item in manifests["train"]:
-                style_text_lists["train"].append(f"{item['wav_path']}|{item['phonemes']}|0")
-            for item in manifests["val"]:
-                style_text_lists["val"].append(f"{item['wav_path']}|{item['phonemes']}|0")
+            # Rebuild style text lists and ensure clean_text, phonemes & tag_vector exist on every item
+            for split_name in ["train", "val"]:
+                for item in manifests[split_name]:
+                    uid = item.get("id") or os.path.splitext(os.path.basename(item.get("wav_path", "")))[0]
+                    item["id"] = uid
+                    if not item.get("clean_text"):
+                        item["clean_text"] = clean_text_for_phonemizer(item.get("text") or item.get("raw_text") or "")
+                    if "phonemes" not in item or not item["phonemes"]:
+                        item["phonemes"] = try_phonemize(item["clean_text"], phonemizer_obj)
+                    if "tag_vector" not in item:
+                        item["tag_vector"] = parse_tags_to_vector(item.get("emotions", {}), item.get("styles", {}))
+                    if "speaker" not in item:
+                        item["speaker"] = "kion"
+                    item["wav_path"] = f"wavs/{uid}.wav"
+
+                    style_text_lists[split_name].append(f"{item['wav_path']}|{item['phonemes']}|0")
 
         # Sub-case 2B: Check for master zips inside directory (e.g. KionTTS_Dataset_train.zip)
         master_zips = glob.glob(os.path.join(source_path, "**", "*.zip"), recursive=True)
