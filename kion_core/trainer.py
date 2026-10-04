@@ -220,14 +220,17 @@ class KionProductionTrainer:
             # because parameters used exclusively in F0Ntrain are marked unused during forward().
             # To prevent autograd conflicts, we keep predictor unwrapped from DDP and synchronize its
             # gradients directly across ranks via all_reduce before optimizer steps.
-            trainable_keys = ["bert_encoder", "text_encoder"]
             if stage == "stage1":
+                # In Stage 1, text_encoder is not used; only bert_encoder, bert, and tag_encoder are trained
+                trainable_keys = ["bert_encoder"]
                 if "bert" in self.model and self.model["bert"] is not None:
                     trainable_keys.append("bert")
             elif stage == "stage2":
-                trainable_keys += ["decoder", "mpd", "msd"]
+                trainable_keys = ["bert_encoder", "decoder", "mpd", "msd"]
                 if "bert" in self.model and self.model["bert"] is not None:
                     trainable_keys.append("bert")
+            else:
+                trainable_keys = []
 
             for k in trainable_keys:
                 if k in self.model and self.model[k] is not None:
@@ -236,7 +239,7 @@ class KionProductionTrainer:
                             self.model[k],
                             device_ids=[dev_idx],
                             output_device=dev_idx,
-                            find_unused_parameters=True,
+                            find_unused_parameters=False,
                         )
 
             if not isinstance(self.tag_encoder, torch.nn.parallel.DistributedDataParallel):
@@ -244,7 +247,7 @@ class KionProductionTrainer:
                     self.tag_encoder,
                     device_ids=[dev_idx],
                     output_device=dev_idx,
-                    find_unused_parameters=True,
+                    find_unused_parameters=False,
                 )
 
             # Ensure predictor parameters are synchronized across ranks at stage start
@@ -279,7 +282,7 @@ class KionProductionTrainer:
             pred_params += list(self.model["predictor"].parameters())
         if "bert_encoder" in self.model:
             pred_params += list(self.model["bert_encoder"].parameters())
-        if "text_encoder" in self.model:
+        if stage != "stage1" and "text_encoder" in self.model:
             pred_params += list(self.model["text_encoder"].parameters())
         
         self.opt_pred = torch.optim.AdamW(pred_params, lr=lr, betas=(0.9, 0.99), weight_decay=1e-4)
@@ -581,12 +584,18 @@ class KionProductionTrainer:
                     if self.opt_bert:
                         self.scaler.unscale_(self.opt_bert)
 
-                    # Explicitly synchronize predictor gradients across distributed ranks
+                    # Explicitly synchronize predictor gradients across distributed ranks (single coalesced all_reduce)
                     if self.is_distributed and "predictor" in self.model and self.model["predictor"] is not None:
-                        for p in self.model["predictor"].parameters():
-                            if p.grad is not None:
-                                torch.distributed.all_reduce(p.grad.data, op=torch.distributed.ReduceOp.SUM)
-                                p.grad.data.div_(self.world_size)
+                        pred_grads = [p.grad.data for p in self.model["predictor"].parameters() if p.grad is not None]
+                        if pred_grads:
+                            flat_grad = torch.cat([g.reshape(-1) for g in pred_grads])
+                            torch.distributed.all_reduce(flat_grad, op=torch.distributed.ReduceOp.SUM)
+                            flat_grad.div_(self.world_size)
+                            offset = 0
+                            for g in pred_grads:
+                                numel = g.numel()
+                                g.copy_(flat_grad[offset:offset + numel].reshape(g.shape))
+                                offset += numel
 
                     torch.nn.utils.clip_grad_norm_(self.tag_encoder.parameters(), max_norm=5.0)
                     torch.nn.utils.clip_grad_norm_(self.opt_pred.param_groups[0]["params"], max_norm=5.0)
@@ -639,13 +648,19 @@ class KionProductionTrainer:
                     if self.is_distributed and torch.distributed.is_initialized():
                         torch.distributed.barrier()
 
-                if self.is_main_process and step % 20 == 0:
+                # Responsive progress logging (every 5 steps, step 0, or end of epoch)
+                log_freq = max(1, min(5, max_steps_this_epoch // 5))
+                if self.is_main_process and (step == 0 or (step + 1) % log_freq == 0 or (step + 1) == max_steps_this_epoch):
+                    elapsed = max(time.time() - epoch_start_time, 1e-3)
+                    it_per_sec = (step + 1) / elapsed
+                    eta_sec = (max_steps_this_epoch - (step + 1)) / max(it_per_sec, 1e-3)
                     print(
                         f"Epoch [{epoch+1:02d}/{epochs}] Step [{step+1:03d}/{max_steps_this_epoch}] (Global: {global_step}) "
                         f"StyleLoss: {loss_style.item():.4f} | "
                         f"F0Loss: {loss_f0.item():.4f} | "
                         f"NormLoss: {loss_norm.item():.4f} | "
-                        f"DurLoss: {loss_dur.item():.4f}"
+                        f"DurLoss: {loss_dur.item():.4f} | "
+                        f"{it_per_sec:.2f} it/s (ETA: {int(eta_sec)}s)"
                     )
 
             avg_style = total_style_loss / max(1, num_batches)
@@ -917,12 +932,18 @@ class KionProductionTrainer:
                     if self.opt_dec:
                         self.scaler.unscale_(self.opt_dec)
 
-                    # Explicitly synchronize predictor gradients across distributed ranks
+                    # Explicitly synchronize predictor gradients across distributed ranks (single coalesced all_reduce)
                     if self.is_distributed and "predictor" in self.model and self.model["predictor"] is not None:
-                        for p in self.model["predictor"].parameters():
-                            if p.grad is not None:
-                                torch.distributed.all_reduce(p.grad.data, op=torch.distributed.ReduceOp.SUM)
-                                p.grad.data.div_(self.world_size)
+                        pred_grads = [p.grad.data for p in self.model["predictor"].parameters() if p.grad is not None]
+                        if pred_grads:
+                            flat_grad = torch.cat([g.reshape(-1) for g in pred_grads])
+                            torch.distributed.all_reduce(flat_grad, op=torch.distributed.ReduceOp.SUM)
+                            flat_grad.div_(self.world_size)
+                            offset = 0
+                            for g in pred_grads:
+                                numel = g.numel()
+                                g.copy_(flat_grad[offset:offset + numel].reshape(g.shape))
+                                offset += numel
 
                     torch.nn.utils.clip_grad_norm_(self.tag_encoder.parameters(), max_norm=5.0)
                     torch.nn.utils.clip_grad_norm_(self.opt_pred.param_groups[0]["params"], max_norm=5.0)
@@ -987,13 +1008,19 @@ class KionProductionTrainer:
                     if self.is_distributed and torch.distributed.is_initialized():
                         torch.distributed.barrier()
 
-                if self.is_main_process and step % 20 == 0:
+                # Responsive progress logging (every 5 steps, step 0, or end of epoch)
+                log_freq = max(1, min(5, max_steps_this_epoch // 5))
+                if self.is_main_process and (step == 0 or (step + 1) % log_freq == 0 or (step + 1) == max_steps_this_epoch):
+                    elapsed = max(time.time() - epoch_start_time, 1e-3)
+                    it_per_sec = (step + 1) / elapsed
+                    eta_sec = (max_steps_this_epoch - (step + 1)) / max(it_per_sec, 1e-3)
                     print(
                         f"Stage2 Epoch [{epoch+1:02d}/{epochs}] Step [{step+1:03d}/{max_steps_this_epoch}] (Global: {global_step}) "
                         f"STFTLoss: {loss_stft.item():.4f} | "
                         f"GenLoss: {loss_gen.item():.4f} | "
                         f"DiscLoss: {loss_d_total.item():.4f} | "
-                        f"StyleLoss: {loss_style.item():.4f}"
+                        f"StyleLoss: {loss_style.item():.4f} | "
+                        f"{it_per_sec:.2f} it/s (ETA: {int(eta_sec)}s)"
                     )
 
             avg_stft = total_stft_loss / max(1, num_batches)
