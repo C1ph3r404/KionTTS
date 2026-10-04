@@ -24,27 +24,23 @@ from kion_core.tag_style_encoder import KionTagStyleEncoder
 from kion_core.checkpoint_manager import KionCheckpointManager
 from kion_core.trainer import KionProductionTrainer
 
-from models import build_model, load_checkpoint
-from Utils.ASR.models import ASRCNN
-from Utils.JDC.model import JDCNet
+from models import build_model, load_checkpoint, load_ASR_models, load_F0_models
+from utils import recursive_munch
 from Utils.PLBERT.util import load_plbert
 
 
 def load_styletts2_backbone(config_path: str, pretrained_ckpt: str, device: str = "cuda"):
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)
-    args = Munch(config["model_params"])
+    args = recursive_munch(config["model_params"])
 
     asr_cfg = os.path.join(REPO_ROOT, "StyleTTS2", config["ASR_config"])
     asr_path = os.path.join(REPO_ROOT, "StyleTTS2", config["ASR_path"])
     f0_path = os.path.join(REPO_ROOT, "StyleTTS2", config["F0_path"])
     bert_dir = os.path.join(REPO_ROOT, "StyleTTS2", config["PLBERT_dir"])
 
-    text_aligner = ASRCNN(config_path=asr_cfg, pretrained_path=asr_path)
-    pitch_extractor = JDCNet(num_class=1, seq_len=192)
-    if os.path.exists(f0_path):
-        pitch_extractor.load_state_dict(torch.load(f0_path, map_location="cpu")["net"])
-
+    text_aligner = load_ASR_models(asr_path, asr_cfg)
+    pitch_extractor = load_F0_models(f0_path)
     plbert = load_plbert(bert_dir)
     model = build_model(args, text_aligner, pitch_extractor, plbert)
 

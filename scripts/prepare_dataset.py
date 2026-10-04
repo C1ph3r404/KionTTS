@@ -530,13 +530,15 @@ def prepare_kion_dataset(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Prepare KionTTS production dataset.")
     parser.add_argument("--source", type=str, default=None, help="Path to kion_dataset.tar or extracted Kaggle folder")
+    parser.add_argument("--tar_path", type=str, default=None, help="Alias for --source: path to kion_dataset.tar")
     parser.add_argument("--output_dir", type=str, default="DataSet", help="Output directory for manifests and audio")
     parser.add_argument("--max_samples", type=int, default=None, help="Optional sample limit for quick smoke test")
     parser.add_argument("--no_phonemize", action="store_true", help="Skip pre-phonemization")
     args = parser.parse_args()
 
+    src = args.source or args.tar_path
     prepare_kion_dataset(
-        source_path=args.source,
+        source_path=src,
         output_dir=args.output_dir,
         max_samples=args.max_samples,
         phonemize=(not args.no_phonemize),

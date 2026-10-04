@@ -179,6 +179,13 @@ class KionCheckpointManager:
         except Exception as e:
             print(f"[!] Warning: Failed uploading {repo_filename} to HF: {e}")
 
+    def upload_sample_audio(self, local_wav_path: str, repo_filename: Optional[str] = None):
+        """Uploads a synthesized audio evaluation sample to Hugging Face Hub under samples/."""
+        if not self.api or not os.path.exists(local_wav_path):
+            return
+        target_name = repo_filename or f"samples/{os.path.basename(local_wav_path)}"
+        self._upload_file(local_wav_path, target_name)
+
     def load_checkpoint(
         self,
         checkpoint_path: str,
@@ -189,8 +196,10 @@ class KionCheckpointManager:
         """
         Loads weights into model submodules and restores optimizer states.
         """
-        print(f"[*] Loading checkpoint from: {checkpoint_path}")
-        state = torch.load(checkpoint_path, map_location="cpu")
+        try:
+            state = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+        except TypeError:
+            state = torch.load(checkpoint_path, map_location="cpu")
         net = state.get("net", state)
 
         for k, mod in models.items():

@@ -29,6 +29,21 @@ from .losses import (
 )
 from .tag_style_encoder import KionTagStyleEncoder
 from .checkpoint_manager import KionCheckpointManager
+from .synthesizer import KionSynthesizer
+
+DEFAULT_EVAL_PROMPTS = [
+    ("[neutral] Antigravity voice synthesis operational on neural cluster.", "neutral"),
+    ("[happy=0.9, excited=0.8] We did it! The full training pipeline converged with pristine acoustic fidelity!", "happy_excited"),
+    ("[sarcasm=0.9] Oh, brilliant. Another zero-division warning to brighten my morning.", "sarcasm"),
+    ("[soothing=0.8, calm=0.7] Take a deep breath. The loss curves are steadily dropping toward zero.", "soothing_calm"),
+]
+
+try:
+    from utils import maximum_path, mask_from_lens, log_norm, length_to_mask
+except ImportError:
+    import sys
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "StyleTTS2"))
+    from utils import maximum_path, mask_from_lens, log_norm, length_to_mask
 
 
 def extract_f0_safe(pitch_extractor, mel_slice):
@@ -44,8 +59,11 @@ def extract_f0_safe(pitch_extractor, mel_slice):
 
 def compute_energy_norm(mel_slice):
     """Computes log spectral energy norm matching StyleTTS2."""
-    norm = torch.log(torch.norm(mel_slice, dim=1) + 1e-5)
-    return norm
+    if mel_slice.dim() == 2:
+        mel_slice = mel_slice.unsqueeze(0)
+    if mel_slice.dim() == 3:
+        mel_slice = mel_slice.unsqueeze(1)
+    return log_norm(mel_slice).squeeze(1)
 
 
 class KionProductionTrainer:
@@ -95,15 +113,16 @@ class KionProductionTrainer:
         if stage == "stage1":
             active_modules = [
                 "predictor", "bert", "bert_encoder", "text_encoder",
-                "style_encoder", "predictor_encoder", "pitch_extractor"
+                "style_encoder", "predictor_encoder", "pitch_extractor", "text_aligner"
             ]
             offload_modules = ["decoder", "mpd", "msd", "diffusion", "wd"]
         elif stage == "stage2":
             active_modules = [
                 "predictor", "bert", "bert_encoder", "text_encoder",
-                "style_encoder", "predictor_encoder", "decoder", "mpd", "msd"
+                "style_encoder", "predictor_encoder", "decoder", "mpd", "msd",
+                "pitch_extractor", "text_aligner"
             ]
-            offload_modules = ["diffusion", "wd", "pitch_extractor"]
+            offload_modules = ["diffusion", "wd"]
         else:
             active_modules = list(self.model.keys())
             offload_modules = []
@@ -180,6 +199,101 @@ class KionProductionTrainer:
             self.opt_disc = torch.optim.AdamW(disc_params, lr=lr, betas=(0.0, 0.99), weight_decay=1e-4)
         else:
             self.opt_disc = None
+
+    def generate_and_save_samples(
+        self,
+        stage: str,
+        epoch: int,
+        step: int,
+        prompts: Optional[list] = None,
+    ):
+        """
+        Synthesizes benchmark audio evaluation samples, saves .wav files locally,
+        logs audio to TensorBoard, and syncs to Hugging Face Hub under samples/.
+        """
+        if "decoder" not in self.model or self.model["decoder"] is None:
+            return
+
+        eval_prompts = prompts or DEFAULT_EVAL_PROMPTS
+        samples_dir = os.path.join(self.output_dir, "samples")
+        os.makedirs(samples_dir, exist_ok=True)
+
+        print(f"\n[*] Generating {len(eval_prompts)} audio evaluation samples for [{stage}] Epoch {epoch}...")
+
+        # Record training state of modules
+        was_training = {k: m.training for k, m in self.model.items() if m is not None}
+        tag_was_training = self.tag_encoder.training
+
+        # Ensure modules are in eval mode during synthesis
+        for k in self.model:
+            if self.model[k] is not None and hasattr(self.model[k], "eval"):
+                self.model[k].eval()
+        self.tag_encoder.eval()
+
+        # Ensure decoder is on self.device for synthesis
+        decoder = self.model["decoder"]
+        try:
+            decoder_device = next(iter(decoder.parameters())).device
+        except Exception:
+            decoder_device = self.device
+        if decoder_device != self.device:
+            decoder.to(self.device)
+
+        phonemizer_fn = None
+        try:
+            from phonemizer.backend import EspeakBackend
+            espeak = EspeakBackend(language="en-us", preserve_punctuation=True, with_stress=True)
+            phonemizer_fn = espeak.phonemize
+        except Exception:
+            pass
+
+        synthesizer = KionSynthesizer(
+            model=self.model,
+            tag_encoder=self.tag_encoder,
+            phonemizer_fn=phonemizer_fn,
+            device=str(self.device),
+        )
+
+        for i, (prompt, tag_label) in enumerate(eval_prompts):
+            try:
+                wave = synthesizer.synthesize(prompt=prompt)
+                if wave is None or len(wave) == 0:
+                    continue
+
+                filename = f"{stage}_epoch_{epoch:03d}_sample_{i+1}_{tag_label}.wav"
+                local_path = os.path.join(samples_dir, filename)
+                import soundfile as sf
+                sf.write(local_path, wave, 24000)
+                print(f"  [✓] Audio sample saved: {filename}")
+
+                # TensorBoard audio logging
+                if self.writer is not None:
+                    try:
+                        self.writer.add_audio(
+                            tag=f"{stage}/Sample_{i+1}_{tag_label}",
+                            snd_tensor=wave,
+                            global_step=epoch,
+                            sample_rate=24000,
+                        )
+                    except Exception as e:
+                        print(f"  [-] TensorBoard audio log notice: {e}")
+
+                # Sync sample to Hugging Face Hub
+                if self.ckpt_manager:
+                    self.ckpt_manager.upload_sample_audio(local_path)
+
+            except Exception as e:
+                print(f"  [!] Notice during sample synthesis '{tag_label}': {e}")
+
+        # Restore decoder device if it was offloaded to CPU
+        if decoder_device != self.device:
+            decoder.to(decoder_device)
+
+        # Restore module training states
+        for k, is_train in was_training.items():
+            if self.model[k] is not None:
+                self.model[k].train(is_train)
+        self.tag_encoder.train(tag_was_training)
 
     def train_stage1(
         self,
@@ -267,6 +381,8 @@ class KionProductionTrainer:
                 ref_mels = ref_mels.to(self.device)
                 tag_vectors = tag_vectors.to(self.device)
 
+                mel_input_length = output_lengths // 2
+
                 with torch.cuda.amp.autocast(enabled=self.use_amp):
                     # 1. Ground-Truth Acoustic & Prosodic Style Extraction
                     with torch.no_grad():
@@ -274,36 +390,64 @@ class KionProductionTrainer:
                         s_prosody_gt = self.model["predictor_encoder"](ref_mels.unsqueeze(1))
                         s_audio_full = torch.cat([s_acoustic_gt, s_prosody_gt], dim=-1)
 
+                        mask = length_to_mask(mel_input_length).to(self.device)
+                        text_mask = length_to_mask(input_lengths).to(self.device)
+                        try:
+                            _, _, s2s_attn = self.model["text_aligner"](mels, mask, texts)
+                            s2s_attn = s2s_attn.transpose(-1, -2)[..., 1:].transpose(-1, -2)
+                            mask_ST = mask_from_lens(s2s_attn, input_lengths, mel_input_length)
+                            s2s_attn_mono = maximum_path(s2s_attn, mask_ST)
+                        except Exception:
+                            s2s_attn_mono = torch.zeros((texts.size(0), texts.size(1), mel_input_length.max()), device=self.device)
+                            for b in range(texts.size(0)):
+                                t_l = input_lengths[b].item()
+                                m_l = mel_input_length[b].item()
+                                if t_l > 0 and m_l > 0:
+                                    step_val = m_l / t_l
+                                    for ti in range(t_l):
+                                        st_f = int(ti * step_val)
+                                        end_f = int((ti + 1) * step_val) if ti < t_l - 1 else m_l
+                                        s2s_attn_mono[b, ti, st_f:max(st_f + 1, end_f)] = 1.0
+
+                        d_gt = s2s_attn_mono.sum(axis=-1).detach()
+                        F0_real = extract_f0_safe(self.model["pitch_extractor"], mels.unsqueeze(1))
+                        N_real = compute_energy_norm(mels)
+
                     # 2. Tag Style Encoder Forward & Grounded Loss
                     s_tag = self.tag_encoder(tag_vectors)  # (B, 256)
                     loss_style = self.style_loss_fn(s_tag, s_audio_full)
 
                     # 3. Text Representation & PL-BERT
-                    text_mask = torch.arange(texts.size(1), device=self.device).unsqueeze(0) >= input_lengths.unsqueeze(1)
                     bert_dur = self.model["bert"](texts, attention_mask=(~text_mask).int())
                     d_en = self.model["bert_encoder"](bert_dur).transpose(-1, -2)
 
                     # 4. Prosody Prediction Loss
                     # Alternate ground truth style and tag style to smoothly ground conditioning
                     cond_style = s_tag[:, 128:] if (step % 2 == 0) else s_prosody_gt
-                    d = self.model["predictor"].text_encoder(d_en, cond_style, input_lengths, text_mask)
-                    x, _ = self.model["predictor"].lstm(d)
-                    duration = self.model["predictor"].duration_proj(x)
-                    duration = torch.sigmoid(duration).sum(axis=-1)
+                    d, p = self.model["predictor"](d_en, cond_style, input_lengths, s2s_attn_mono, text_mask)
 
-                    with torch.no_grad():
-                        mel_input_length = output_lengths // 2
-                        F0_real = extract_f0_safe(self.model["pitch_extractor"], mels.unsqueeze(1))
-                        N_real = compute_energy_norm(mels)
-
-                    # Interpolate duration predictions to mel frame length for F0/N prediction
-                    aln_target = F.interpolate(d.transpose(-1, -2), size=mels.size(-1), mode="nearest")
-                    F0_pred, N_pred = self.model["predictor"].F0Ntrain(aln_target, cond_style)
+                    # Aligned prosodic features p has shape (B, 640, mel_input_length)
+                    # F0Ntrain upsamples by 2x to (B, output_lengths), exactly matching F0_real and N_real
+                    F0_pred, N_pred = self.model["predictor"].F0Ntrain(p, cond_style)
 
                     # Predictor Losses
-                    loss_f0 = F.smooth_l1_loss(F0_pred.squeeze(), F0_real.squeeze())
-                    loss_norm = F.smooth_l1_loss(N_pred.squeeze(), N_real.squeeze())
-                    loss_dur = F.l1_loss(duration.sum(dim=-1), output_lengths.float()) / 100.0
+                    loss_f0 = F.smooth_l1_loss(F0_pred, F0_real)
+                    loss_norm = F.smooth_l1_loss(N_pred, N_real)
+
+                    # StyleTTS2 Duration & CE loss
+                    loss_dur = 0.0
+                    loss_ce = 0.0
+                    for _s2s_pred, _text_input, _text_length in zip(d, d_gt, input_lengths):
+                        _s2s_pred = _s2s_pred[:_text_length, :]
+                        _text_input = _text_input[:_text_length].long()
+                        _s2s_trg = torch.zeros_like(_s2s_pred)
+                        for idx in range(_s2s_trg.shape[0]):
+                            _s2s_trg[idx, :_text_input[idx]] = 1.0
+                        _dur_pred = torch.sigmoid(_s2s_pred).sum(axis=1)
+                        loss_dur = loss_dur + F.l1_loss(_dur_pred[1:_text_length-1], _text_input[1:_text_length-1].float())
+                        loss_ce = loss_ce + F.binary_cross_entropy_with_logits(_s2s_pred.flatten(), _s2s_trg.flatten())
+                    loss_dur = (loss_dur + loss_ce) / max(1, texts.size(0))
+
                     loss_predictor = loss_f0 + loss_norm + loss_dur
 
                     # Combined Step Loss
@@ -312,15 +456,23 @@ class KionProductionTrainer:
                 # Backward pass
                 self.scaler.scale(loss_step).backward()
 
-                if (step + 1) % self.accum_steps == 0 or (step + 1) == len(train_loader):
+                if (step + 1) % self.accum_steps == 0 or (step + 1) == max_steps_this_epoch:
                     self.scaler.unscale_(self.opt_tag)
                     self.scaler.unscale_(self.opt_pred)
+                    if self.opt_bert:
+                        self.scaler.unscale_(self.opt_bert)
+
                     torch.nn.utils.clip_grad_norm_(self.tag_encoder.parameters(), max_norm=5.0)
                     torch.nn.utils.clip_grad_norm_(self.opt_pred.param_groups[0]["params"], max_norm=5.0)
+                    if self.opt_bert:
+                        torch.nn.utils.clip_grad_norm_(self.opt_bert.param_groups[0]["params"], max_norm=5.0)
 
                     self.scaler.step(self.opt_tag)
                     self.scaler.step(self.opt_pred)
+                    if self.opt_bert:
+                        self.scaler.step(self.opt_bert)
                     self.scaler.update()
+
                     self.opt_tag.zero_grad(set_to_none=True)
                     self.opt_pred.zero_grad(set_to_none=True)
                     if self.opt_bert:
@@ -413,6 +565,7 @@ class KionProductionTrainer:
                     is_best=is_best,
                     upload_hf=True,
                 )
+                self.generate_and_save_samples(stage="stage1", epoch=epoch + 1, step=global_step)
 
         print("[✓] Stage 1 Training Completed Successfully!")
 
@@ -500,6 +653,8 @@ class KionProductionTrainer:
 
                 batch_size = texts.size(0)
 
+                mel_input_length = output_lengths // 2
+
                 # ── Step A: Predictor & Style Forward ──
                 with torch.cuda.amp.autocast(enabled=self.use_amp):
                     with torch.no_grad():
@@ -507,62 +662,92 @@ class KionProductionTrainer:
                         s_prosody_gt = self.model["predictor_encoder"](ref_mels.unsqueeze(1))
                         s_audio_full = torch.cat([s_acoustic_gt, s_prosody_gt], dim=-1)
 
+                        mask = length_to_mask(mel_input_length).to(self.device)
+                        text_mask = length_to_mask(input_lengths).to(self.device)
+                        try:
+                            _, _, s2s_attn = self.model["text_aligner"](mels, mask, texts)
+                            s2s_attn = s2s_attn.transpose(-1, -2)[..., 1:].transpose(-1, -2)
+                            mask_ST = mask_from_lens(s2s_attn, input_lengths, mel_input_length)
+                            s2s_attn_mono = maximum_path(s2s_attn, mask_ST)
+                        except Exception:
+                            s2s_attn_mono = torch.zeros((texts.size(0), texts.size(1), mel_input_length.max()), device=self.device)
+                            for b in range(texts.size(0)):
+                                t_l = input_lengths[b].item()
+                                m_l = mel_input_length[b].item()
+                                if t_l > 0 and m_l > 0:
+                                    step_val = m_l / t_l
+                                    for ti in range(t_l):
+                                        st_f = int(ti * step_val)
+                                        end_f = int((ti + 1) * step_val) if ti < t_l - 1 else m_l
+                                        s2s_attn_mono[b, ti, st_f:max(st_f + 1, end_f)] = 1.0
+
                     s_tag = self.tag_encoder(tag_vectors)
                     loss_style = self.style_loss_fn(s_tag, s_audio_full)
 
-                    text_mask = torch.arange(texts.size(1), device=self.device).unsqueeze(0) >= input_lengths.unsqueeze(1)
+                    # Encode acoustic text representations (t_en) aligned to mel frames: asr
+                    t_en = self.model["text_encoder"](texts, input_lengths, text_mask)
+                    asr = (t_en @ s2s_attn_mono)  # (B, 512, mel_input_length)
+
                     bert_dur = self.model["bert"](texts, attention_mask=(~text_mask).int())
                     d_en = self.model["bert_encoder"](bert_dur).transpose(-1, -2)
 
                     cond_style = s_tag[:, 128:]
-                    aln_target = F.interpolate(d_en, size=mels.size(-1), mode="nearest")
-                    F0_pred, N_pred = self.model["predictor"].F0Ntrain(aln_target, cond_style)
+                    d, p = self.model["predictor"](d_en, cond_style, input_lengths, s2s_attn_mono, text_mask)
 
                 # ── Step B: Sliced Real Audio & Decoder Forward ──
-                # Extract random window of `dec_window` frames (300 samples per hop)
-                hop_len = 300
-                min_mel_len = int(output_lengths.min().item())
-                if min_mel_len <= dec_window + 4:
+                # Slicing matching StyleTTS2:
+                # `dec_window` is in downsampled frames (hop 600, each frame = 2 mel frames = 600 audio samples)
+                # Slicing win_len frames produces win_len * 600 audio samples.
+                win_len = min(dec_window, int(mel_input_length.min().item() - 1))
+                if win_len < 10:
                     continue
 
+                en_slices = []
+                p_slices = []
                 wav_slices = []
                 mel_slices = []
-                aln_slices = []
-                f0_slices = []
-                n_slices = []
 
                 for b in range(batch_size):
-                    cur_mel_len = int(output_lengths[b].item())
-                    max_start = max(1, cur_mel_len - dec_window - 1)
-                    st_frame = np.random.randint(0, max_start)
+                    cur_len = int(mel_input_length[b].item())
+                    max_st = max(1, cur_len - win_len)
+                    st = np.random.randint(0, max_st)
 
-                    # Mel & Aln slice
-                    mel_slices.append(mels[b : b + 1, :, st_frame : st_frame + dec_window])
-                    aln_slices.append(aln_target[b : b + 1, :, st_frame : st_frame + dec_window])
-                    f0_slices.append(F0_pred[b : b + 1, :, st_frame * 2 : (st_frame + dec_window) * 2])
-                    n_slices.append(N_pred[b : b + 1, :, st_frame * 2 : (st_frame + dec_window) * 2])
+                    en_slices.append(asr[b : b + 1, :, st : st + win_len])
+                    p_slices.append(p[b : b + 1, :, st : st + win_len])
+                    mel_slices.append(mels[b : b + 1, :, st * 2 : (st + win_len) * 2])
 
-                    # Audio slice from raw wave
-                    st_sample = st_frame * hop_len
-                    end_sample = st_sample + (dec_window * hop_len)
+                    # Audio slice from raw wave (24000 Hz, hop 300 for mel -> hop 600 for downsampled frames)
+                    st_sample = (st * 2) * 300
+                    end_sample = (st + win_len) * 2 * 300
                     w_raw = waves[b]
+                    target_len = (win_len * 2) * 300
                     if len(w_raw) >= end_sample:
                         w_sub = w_raw[st_sample:end_sample]
                     else:
-                        w_sub = np.pad(w_raw, (0, max(0, end_sample - len(w_raw))))[:end_sample]
-                    wav_slices.append(torch.from_numpy(w_sub).float().to(self.device))
+                        w_sub = np.pad(w_raw, (0, max(0, end_sample - len(w_raw))))[st_sample:end_sample]
+                    if len(w_sub) < target_len:
+                        w_sub = np.pad(w_sub, (0, target_len - len(w_sub)))
+                    wav_slices.append(torch.from_numpy(w_sub[:target_len]).float().to(self.device))
 
-                y_real = torch.stack(wav_slices).unsqueeze(1)  # (B, 1, dec_window * 300)
-                aln_sub = torch.cat(aln_slices, dim=0)
-                f0_sub = torch.cat(f0_slices, dim=0)
-                n_sub = torch.cat(n_slices, dim=0)
+                y_real = torch.stack(wav_slices).unsqueeze(1)  # (B, 1, win_len * 600)
+                en_sub = torch.cat(en_slices, dim=0)
+                p_sub = torch.cat(p_slices, dim=0)
+                gt_sub = torch.cat(mel_slices, dim=0)
                 ref_sub = s_tag[:, :128]
 
-                with torch.cuda.amp.autocast(enabled=self.use_amp):
-                    y_rec = self.model["decoder"](aln_sub, f0_sub, n_sub, ref_sub)
+                with torch.no_grad():
+                    F0_real = extract_f0_safe(self.model["pitch_extractor"], gt_sub.unsqueeze(1))
+                    N_real = compute_energy_norm(gt_sub)
 
-                    # Multi-Resolution STFT Reconstruction Loss against real audio
+                with torch.cuda.amp.autocast(enabled=self.use_amp):
+                    F0_pred, N_pred = self.model["predictor"].F0Ntrain(p_sub, cond_style)
+                    y_rec = self.model["decoder"](en_sub, F0_pred, N_pred, ref_sub)
+
+                    # Multi-Resolution STFT Reconstruction Loss against real audio (lengths match 1:1)
                     loss_stft = self.stft_loss(y_rec, y_real)
+
+                    loss_f0_rec = F.smooth_l1_loss(F0_pred, F0_real) / 10.0
+                    loss_norm_rec = F.smooth_l1_loss(N_pred, N_real)
 
                     # GAN Generator Loss
                     if self.gen_loss_fn:
@@ -570,48 +755,46 @@ class KionProductionTrainer:
                     else:
                         loss_gen = torch.tensor(0.0, device=self.device)
 
-                    loss_g_total = loss_stft * 2.5 + loss_gen * 1.0 + loss_style * 1.0
+                    loss_g_total = (loss_stft * 2.5 + loss_gen * 1.0 + loss_style * 1.0 + loss_f0_rec + loss_norm_rec) / self.accum_steps
 
-                # ── Step C: Generator Backward & Step ──
-                self.opt_tag.zero_grad()
-                self.opt_pred.zero_grad()
-                if self.opt_dec:
-                    self.opt_dec.zero_grad()
-
+                # ── Step C: Generator Backward & Accumulation ──
                 self.scaler.scale(loss_g_total).backward()
-                self.scaler.unscale_(self.opt_tag)
-                self.scaler.unscale_(self.opt_pred)
-                if self.opt_dec:
-                    self.scaler.unscale_(self.opt_dec)
 
-                torch.nn.utils.clip_grad_norm_(self.tag_encoder.parameters(), max_norm=5.0)
-                torch.nn.utils.clip_grad_norm_(self.opt_pred.param_groups[0]["params"], max_norm=5.0)
-                if self.opt_dec:
-                    torch.nn.utils.clip_grad_norm_(self.opt_dec.param_groups[0]["params"], max_norm=5.0)
-
-                self.scaler.step(self.opt_tag)
-                self.scaler.step(self.opt_pred)
-                if self.opt_dec:
-                    self.scaler.step(self.opt_dec)
-                self.scaler.update()
-                self.opt_tag.zero_grad(set_to_none=True)
-                self.opt_pred.zero_grad(set_to_none=True)
-                if self.opt_dec:
-                    self.opt_dec.zero_grad(set_to_none=True)
-
-                # ── Step D: Discriminator Backward & Step ──
+                # ── Step D: Discriminator Backward & Accumulation ──
                 loss_d_total = torch.tensor(0.0, device=self.device)
                 if self.disc_loss_fn and self.opt_disc:
-                    self.opt_disc.zero_grad(set_to_none=True)
                     with torch.cuda.amp.autocast(enabled=self.use_amp):
-                        loss_d_total = self.disc_loss_fn(y_real, y_rec.detach())
-
+                        loss_d_total = self.disc_loss_fn(y_real, y_rec.detach()) / self.accum_steps
                     self.scaler_d.scale(loss_d_total).backward()
-                    self.scaler_d.unscale_(self.opt_disc)
-                    torch.nn.utils.clip_grad_norm_(self.opt_disc.param_groups[0]["params"], max_norm=5.0)
-                    self.scaler_d.step(self.opt_disc)
-                    self.scaler_d.update()
-                    self.opt_disc.zero_grad(set_to_none=True)
+
+                if (step + 1) % self.accum_steps == 0 or (step + 1) == max_steps_this_epoch:
+                    self.scaler.unscale_(self.opt_tag)
+                    self.scaler.unscale_(self.opt_pred)
+                    if self.opt_dec:
+                        self.scaler.unscale_(self.opt_dec)
+
+                    torch.nn.utils.clip_grad_norm_(self.tag_encoder.parameters(), max_norm=5.0)
+                    torch.nn.utils.clip_grad_norm_(self.opt_pred.param_groups[0]["params"], max_norm=5.0)
+                    if self.opt_dec:
+                        torch.nn.utils.clip_grad_norm_(self.opt_dec.param_groups[0]["params"], max_norm=5.0)
+
+                    self.scaler.step(self.opt_tag)
+                    self.scaler.step(self.opt_pred)
+                    if self.opt_dec:
+                        self.scaler.step(self.opt_dec)
+                    self.scaler.update()
+
+                    self.opt_tag.zero_grad(set_to_none=True)
+                    self.opt_pred.zero_grad(set_to_none=True)
+                    if self.opt_dec:
+                        self.opt_dec.zero_grad(set_to_none=True)
+
+                    if self.disc_loss_fn and self.opt_disc:
+                        self.scaler_d.unscale_(self.opt_disc)
+                        torch.nn.utils.clip_grad_norm_(self.opt_disc.param_groups[0]["params"], max_norm=5.0)
+                        self.scaler_d.step(self.opt_disc)
+                        self.scaler_d.update()
+                        self.opt_disc.zero_grad(set_to_none=True)
 
                 total_stft_loss += loss_stft.item()
                 total_gen_loss += loss_gen.item()
@@ -710,5 +893,6 @@ class KionProductionTrainer:
                     is_best=is_best,
                     upload_hf=True,
                 )
+                self.generate_and_save_samples(stage="stage2", epoch=epoch + 1, step=global_step)
 
         print("[✓] Stage 2 Training Completed Successfully!")
