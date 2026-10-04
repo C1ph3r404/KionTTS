@@ -13,27 +13,37 @@ from typing import Dict, Any, Optional, List
 
 
 def get_hf_token() -> Optional[str]:
-    """Discovers Hugging Face token across Colab secrets, Kaggle secrets, env vars, or HF cache."""
-    # 1. Colab Secrets
+    """Discovers Hugging Face token across Kaggle secrets, Colab secrets, env vars, or HF cache."""
+    # 1. Kaggle Secrets (Primary)
     try:
-        from google.colab import userdata
-        t = userdata.get("HF_TOKEN")
-        if t:
-            return t.strip()
+        from kaggle_secrets import UserSecretsClient
+        user_secrets = UserSecretsClient()
+        for sec_name in ["HF_TOKEN", "HUGGINGFACE_TOKEN", "HUGGING_FACE_HUB_TOKEN", "hf_token", "HF_API_TOKEN"]:
+            try:
+                t = user_secrets.get_secret(sec_name)
+                if t and len(t.strip()) > 0:
+                    print(f"[✓] Retrieved Hugging Face token from Kaggle Secret: '{sec_name}'")
+                    return t.strip()
+            except Exception:
+                pass
     except Exception:
         pass
 
-    # 2. Kaggle Secrets
+    # 2. Colab Secrets
     try:
-        from kaggle_secrets import UserSecretsClient
-        t = UserSecretsClient().get_secret("HF_TOKEN")
-        if t:
-            return t.strip()
+        from google.colab import userdata
+        for sec_name in ["HF_TOKEN", "HUGGINGFACE_TOKEN", "HUGGING_FACE_HUB_TOKEN", "hf_token"]:
+            try:
+                t = userdata.get(sec_name)
+                if t and len(t.strip()) > 0:
+                    return t.strip()
+            except Exception:
+                pass
     except Exception:
         pass
 
     # 3. Environment Variables
-    for env_var in ["HF_TOKEN", "HUGGING_FACE_HUB_TOKEN", "HF_AUTH_TOKEN"]:
+    for env_var in ["HF_TOKEN", "HUGGINGFACE_TOKEN", "HUGGING_FACE_HUB_TOKEN", "HF_AUTH_TOKEN", "hf_token"]:
         val = os.environ.get(env_var, "").strip()
         if val:
             return val
@@ -63,7 +73,7 @@ class KionCheckpointManager:
     ):
         self.checkpoint_dir = checkpoint_dir
         os.makedirs(self.checkpoint_dir, exist_ok=True)
-        self.repo_id = repo_id or os.environ.get("HF_REPO_ID", "C1ph3r404/KionTTS")
+        self.repo_id = repo_id or os.environ.get("HF_REPO_ID", "nate0001/KionTTS")
         self.hf_token = hf_token or get_hf_token()
         self.keep_last_n = keep_last_n
 

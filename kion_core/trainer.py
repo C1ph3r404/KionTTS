@@ -15,7 +15,10 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.tensorboard import SummaryWriter
+try:
+    from torch.utils.tensorboard import SummaryWriter
+except (ImportError, ModuleNotFoundError):
+    SummaryWriter = None
 from typing import Dict, Any, Optional
 
 from .losses import (
@@ -71,7 +74,7 @@ class KionProductionTrainer:
 
         os.makedirs(self.output_dir, exist_ok=True)
         os.makedirs(self.log_dir, exist_ok=True)
-        self.writer = SummaryWriter(self.log_dir)
+        self.writer = SummaryWriter(self.log_dir) if SummaryWriter is not None else None
 
         # Build base losses
         self.stft_loss = MultiResolutionSTFTLoss().to(self.device)
@@ -361,9 +364,10 @@ class KionProductionTrainer:
                 f"  Total Epoch Loss   : {epoch_loss:.4f}\n"
             )
 
-            self.writer.add_scalar("Stage1/StyleLoss", avg_style, epoch + 1)
-            self.writer.add_scalar("Stage1/PredictorLoss", avg_pred, epoch + 1)
-            self.writer.add_scalar("Stage1/TotalLoss", epoch_loss, epoch + 1)
+            if self.writer is not None:
+                self.writer.add_scalar("Stage1/StyleLoss", avg_style, epoch + 1)
+                self.writer.add_scalar("Stage1/PredictorLoss", avg_pred, epoch + 1)
+                self.writer.add_scalar("Stage1/TotalLoss", epoch_loss, epoch + 1)
 
             # Checkpoint saving & remote sync
             is_best = epoch_loss < best_loss
@@ -638,9 +642,10 @@ class KionProductionTrainer:
                 f"  Avg Disc Loss : {avg_disc:.4f}\n"
             )
 
-            self.writer.add_scalar("Stage2/STFTLoss", avg_stft, epoch + 1)
-            self.writer.add_scalar("Stage2/GenLoss", avg_gen, epoch + 1)
-            self.writer.add_scalar("Stage2/DiscLoss", avg_disc, epoch + 1)
+            if self.writer is not None:
+                self.writer.add_scalar("Stage2/STFTLoss", avg_stft, epoch + 1)
+                self.writer.add_scalar("Stage2/GenLoss", avg_gen, epoch + 1)
+                self.writer.add_scalar("Stage2/DiscLoss", avg_disc, epoch + 1)
 
             # Checkpoint saving & remote sync
             is_best = epoch_loss < best_loss

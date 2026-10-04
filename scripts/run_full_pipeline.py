@@ -42,6 +42,8 @@ def main():
     parser.add_argument("--skip_stage1", action="store_true", help="Skip Stage 1 training")
     parser.add_argument("--skip_stage2", action="store_true", help="Skip Stage 2 training")
     parser.add_argument("--multi_gpu", action="store_true", help="Launch with accelerate multi-gpu")
+    parser.add_argument("--hf_repo", type=str, default="nate0001/KionTTS", help="Hugging Face repo for checkpoint sync")
+    parser.add_argument("--hf_token", type=str, default=None, help="Hugging Face API token (defaults to Kaggle Secrets or env)")
     args = parser.parse_args()
 
     manifest_train = os.path.join(args.data_dir, "train_manifest.json")
@@ -55,6 +57,7 @@ def main():
 
     # Launch prefix (accelerate or direct python)
     runner_prefix = "accelerate launch --multi_gpu" if args.multi_gpu else sys.executable
+    token_arg = f" --hf_token {args.hf_token}" if args.hf_token else ""
 
     # Step 2: Stage 1 Training
     if not args.skip_stage1:
@@ -64,7 +67,9 @@ def main():
             f"--batch_size {args.batch_size} "
             f"--accum_steps {args.accum_steps} "
             f"--manifest {manifest_train} "
-            f"--data_root {args.data_dir}"
+            f"--data_root {args.data_dir} "
+            f"--hf_repo {args.hf_repo}"
+            f"{token_arg}"
         )
         run_command(cmd_s1, "Executing Stage 1: Acoustic Foundation & Tag Alignment")
 
@@ -76,7 +81,9 @@ def main():
             f"--batch_size {args.batch_size} "
             f"--accum_steps {args.accum_steps} "
             f"--manifest {manifest_train} "
-            f"--data_root {args.data_dir}"
+            f"--data_root {args.data_dir} "
+            f"--hf_repo {args.hf_repo}"
+            f"{token_arg}"
         )
         run_command(cmd_s2, "Executing Stage 2: HiFi-GAN Vocoder & GAN Discriminators")
 

@@ -71,7 +71,8 @@ def main():
     parser.add_argument("--save_freq", type=int, default=5, help="Epoch save frequency")
     parser.add_argument("--save_step_freq", type=int, default=500, help="Step-interval save & HF sync frequency")
     parser.add_argument("--accum_steps", type=int, default=1, help="Gradient accumulation steps")
-    parser.add_argument("--hf_repo", type=str, default="C1ph3r404/KionTTS", help="Hugging Face repo for checkpoint sync")
+    parser.add_argument("--hf_repo", type=str, default="nate0001/KionTTS", help="Hugging Face repo for checkpoint sync")
+    parser.add_argument("--hf_token", type=str, default=None, help="Hugging Face API token (defaults to Kaggle Secrets or env)")
     args = parser.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -86,6 +87,7 @@ def main():
     ckpt_manager = KionCheckpointManager(
         checkpoint_dir=args.checkpoint_dir,
         repo_id=args.hf_repo,
+        hf_token=args.hf_token,
     )
 
     # Check for existing checkpoint to resume

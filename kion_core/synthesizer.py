@@ -13,7 +13,7 @@ import torch
 import numpy as np
 import soundfile as sf
 import librosa
-from typing import Optional, Union, Tuple, Dict, List
+from typing import Optional, Union, Tuple, Dict, List, Any
 
 # Official StyleTTS2 178-token dictionary
 _pad = "$"
