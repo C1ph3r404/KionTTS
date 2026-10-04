@@ -50,6 +50,23 @@ def load_styletts2_backbone(config_path: str, pretrained_ckpt: str, device: str 
         print(f"[*] Loading pretrained LibriTTS checkpoint from: {pretrained_ckpt}")
         model, _, _, _ = load_checkpoint(model, None, pretrained_ckpt, load_only_params=True)
 
+    # StyleTTS2 standard: ensure predictor_encoder has pretrained weights.
+    # StyleTTS2 train_second/train_finetune clones style_encoder into predictor_encoder
+    # if it wasn't present in the checkpoint.
+    if "predictor_encoder" in model and "style_encoder" in model:
+        import copy
+        has_pretrained_pred = False
+        if os.path.exists(pretrained_ckpt):
+            try:
+                ckpt_data = torch.load(pretrained_ckpt, map_location="cpu", weights_only=False)
+                if "net" in ckpt_data and "predictor_encoder" in ckpt_data["net"]:
+                    has_pretrained_pred = True
+            except Exception:
+                pass
+        if not has_pretrained_pred:
+            print("[*] Initializing predictor_encoder from style_encoder (StyleTTS2 architecture standard)...")
+            model.predictor_encoder = copy.deepcopy(model.style_encoder)
+
     return model, config
 
 

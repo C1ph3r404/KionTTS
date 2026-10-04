@@ -538,38 +538,40 @@ class KionProductionTrainer:
 
                 mel_input_length = output_lengths // 2
 
+                # 1. Ground-Truth Acoustic & Prosodic Style Extraction in FP32 (prevents spectral_norm FP16 overflow)
+                with torch.no_grad(), torch.amp.autocast('cuda', enabled=False):
+                    s_acoustic_gt = self.model["style_encoder"](ref_mels.unsqueeze(1).float()).float()
+                    s_prosody_gt = self.model["predictor_encoder"](ref_mels.unsqueeze(1).float()).float()
+                    s_acoustic_gt = torch.nan_to_num(s_acoustic_gt, nan=0.0, posinf=1.0, neginf=-1.0).clamp(-10.0, 10.0)
+                    s_prosody_gt = torch.nan_to_num(s_prosody_gt, nan=0.0, posinf=1.0, neginf=-1.0).clamp(-10.0, 10.0)
+                    s_audio_full = torch.cat([s_acoustic_gt, s_prosody_gt], dim=-1)
+
+                    mask = length_to_mask(mel_input_length).to(self.device)
+                    text_mask = length_to_mask(input_lengths).to(self.device)
+                    try:
+                        _, _, s2s_attn = self.model["text_aligner"](mels, mask, texts)
+                        s2s_attn = s2s_attn.transpose(-1, -2)[..., 1:].transpose(-1, -2)
+                        mask_ST = mask_from_lens(s2s_attn, input_lengths, mel_input_length)
+                        s2s_attn_mono = maximum_path(s2s_attn, mask_ST)
+                    except Exception:
+                        s2s_attn_mono = torch.zeros((texts.size(0), texts.size(1), mel_input_length.max()), device=self.device)
+                        for b in range(texts.size(0)):
+                            t_l = input_lengths[b].item()
+                            m_l = mel_input_length[b].item()
+                            if t_l > 0 and m_l > 0:
+                                step_val = m_l / t_l
+                                for ti in range(t_l):
+                                    st_f = int(ti * step_val)
+                                    end_f = int((ti + 1) * step_val) if ti < t_l - 1 else m_l
+                                    s2s_attn_mono[b, ti, st_f:max(st_f + 1, end_f)] = 1.0
+
+                    d_gt = s2s_attn_mono.sum(axis=-1).detach()
+                    F0_real = extract_f0_safe(self.model["pitch_extractor"], mels.unsqueeze(1))
+                    F0_real = torch.nan_to_num(F0_real, nan=0.0, posinf=0.0, neginf=0.0)
+                    N_real = compute_energy_norm(mels)
+                    N_real = torch.nan_to_num(N_real, nan=0.0, posinf=0.0, neginf=0.0)
+
                 with self.autocast():
-                    # 1. Ground-Truth Acoustic & Prosodic Style Extraction
-                    with torch.no_grad():
-                        s_acoustic_gt = self.model["style_encoder"](ref_mels.unsqueeze(1))
-                        s_prosody_gt = self.model["predictor_encoder"](ref_mels.unsqueeze(1))
-                        s_audio_full = torch.cat([s_acoustic_gt, s_prosody_gt], dim=-1)
-
-                        mask = length_to_mask(mel_input_length).to(self.device)
-                        text_mask = length_to_mask(input_lengths).to(self.device)
-                        try:
-                            _, _, s2s_attn = self.model["text_aligner"](mels, mask, texts)
-                            s2s_attn = s2s_attn.transpose(-1, -2)[..., 1:].transpose(-1, -2)
-                            mask_ST = mask_from_lens(s2s_attn, input_lengths, mel_input_length)
-                            s2s_attn_mono = maximum_path(s2s_attn, mask_ST)
-                        except Exception:
-                            s2s_attn_mono = torch.zeros((texts.size(0), texts.size(1), mel_input_length.max()), device=self.device)
-                            for b in range(texts.size(0)):
-                                t_l = input_lengths[b].item()
-                                m_l = mel_input_length[b].item()
-                                if t_l > 0 and m_l > 0:
-                                    step_val = m_l / t_l
-                                    for ti in range(t_l):
-                                        st_f = int(ti * step_val)
-                                        end_f = int((ti + 1) * step_val) if ti < t_l - 1 else m_l
-                                        s2s_attn_mono[b, ti, st_f:max(st_f + 1, end_f)] = 1.0
-
-                        d_gt = s2s_attn_mono.sum(axis=-1).detach()
-                        F0_real = extract_f0_safe(self.model["pitch_extractor"], mels.unsqueeze(1))
-                        F0_real = torch.nan_to_num(F0_real, nan=0.0, posinf=0.0, neginf=0.0)
-                        N_real = compute_energy_norm(mels)
-                        N_real = torch.nan_to_num(N_real, nan=0.0, posinf=0.0, neginf=0.0)
-
                     # 2. Tag Style Encoder Forward & Grounded Loss
                     s_tag = self.tag_encoder(tag_vectors)  # (B, 256)
                     loss_style = self.style_loss_fn(s_tag, s_audio_full)
@@ -580,13 +582,15 @@ class KionProductionTrainer:
 
                     # 4. Prosody Prediction Loss (Computed in FP32 to prevent LSTM FP16 overflow)
                     cond_style = s_tag[:, 128:] if (step % 2 == 0) else s_prosody_gt
-                    cond_style_f32 = cond_style.float()
-                    d_en_f32 = d_en.float()
+                    cond_style_f32 = torch.nan_to_num(cond_style.float(), nan=0.0, posinf=1.0, neginf=-1.0).clamp(-10.0, 10.0)
+                    d_en_f32 = torch.nan_to_num(d_en.float(), nan=0.0).clamp(-50.0, 50.0)
 
                 # Predictor forward and loss in FP32
                 with torch.amp.autocast('cuda', enabled=False):
                     d, p = self.model["predictor"](d_en_f32, cond_style_f32, input_lengths, s2s_attn_mono.float(), text_mask)
                     F0_pred, N_pred = self.model["predictor"].F0Ntrain(p, cond_style_f32)
+                    F0_pred = torch.nan_to_num(F0_pred, nan=0.0).clamp(0.0, 1000.0)
+                    N_pred = torch.nan_to_num(N_pred, nan=0.0).clamp(-50.0, 50.0)
 
                     # Predictor Losses (StyleTTS2 divides F0 loss by 10 to balance raw Hz scale)
                     loss_f0 = F.smooth_l1_loss(F0_pred, F0_real.float()) / 10.0
