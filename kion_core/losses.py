@@ -218,19 +218,19 @@ class KionStyleAlignmentLoss(nn.Module):
         s_tag_safe = torch.nan_to_num(s_tag, nan=0.0).clamp(-10.0, 10.0)
         s_audio_safe = torch.nan_to_num(s_audio, nan=0.0).clamp(-10.0, 10.0)
 
-        # 1. Coordinate-wise MSE distance
-        loss_mse = F.mse_loss(s_tag_safe, s_audio_safe)
-
-        # 2. Angular cosine distance
+        # 1. Angular cosine distance between style vectors
         s_tag_norm = F.normalize(s_tag_safe, p=2, dim=-1, eps=1e-4)
         s_audio_norm = F.normalize(s_audio_safe, p=2, dim=-1, eps=1e-4)
         cos_sim = (s_tag_norm * s_audio_norm).sum(dim=-1).clamp(-1.0, 1.0)
         loss_cos = (1.0 - cos_sim).mean()
 
-        # 3. Norm penalty to prevent divergence
-        norm_penalty = (s_tag_safe.norm(dim=-1) - s_audio_safe.norm(dim=-1).detach()).pow(2).mean()
+        # 2. Normalized L1 feature matching (matching StyleTTS2 style reconstruction standard)
+        loss_l1 = F.l1_loss(s_tag_norm, s_audio_norm)
 
-        total = loss_mse + self.lambda_cos * loss_cos + self.lambda_reg * norm_penalty
+        # 3. Direct L1 coordinate loss for fine-grained alignment
+        loss_direct = F.l1_loss(s_tag_safe, s_audio_safe.detach()) * 0.1
+
+        total = self.lambda_cos * loss_cos + loss_l1 + loss_direct
         if torch.isnan(total) or torch.isinf(total):
             return torch.tensor(0.0, device=s_tag.device, requires_grad=True)
         return total
