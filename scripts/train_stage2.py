@@ -136,11 +136,6 @@ def main():
         start_step = state_meta.get("step", 0)
         if is_main_process:
             print(f"[✓] Resuming Stage 2 from epoch {start_epoch}, step {start_step}...")
-
-        if start_epoch >= args.epochs:
-            if is_main_process:
-                print(f"[✓] Stage 2 target of {args.epochs} epochs has already been completed (found checkpoint at epoch {start_epoch}). Exiting Stage 2.")
-            return
     else:
         # Load weights from Stage 1
         s1_ckpt = args.stage1_ckpt or ckpt_manager.find_latest_checkpoint(stage="stage1")
@@ -174,6 +169,19 @@ def main():
             num_workers=args.num_workers,
             is_distributed=False,
         )
+
+    # Reconcile epoch counter from global step (handles legacy checkpoints affected by step-checkpoint off-by-one)
+    if start_step > 0 and len(train_loader) > 0:
+        expected_epoch = start_step // len(train_loader)
+        if start_epoch != expected_epoch:
+            if is_main_process:
+                print(f"[*] Reconciling epoch counter: checkpoint recorded epoch {start_epoch}, but global_step {start_step} corresponds to epoch {expected_epoch} ({start_step} // {len(train_loader)} steps). Resuming at epoch {expected_epoch}.")
+            start_epoch = expected_epoch
+
+    if start_epoch >= args.epochs:
+        if is_main_process:
+            print(f"[✓] Stage 2 target of {args.epochs} epochs has already been completed (found checkpoint at epoch {start_epoch}). Exiting Stage 2.")
+        return
 
     # 5. Initialize Production Trainer
     trainer = KionProductionTrainer(

@@ -138,11 +138,6 @@ def main():
         if is_main_process:
             print(f"[✓] Resuming Stage 1 from epoch {start_epoch}, step {start_step}...")
 
-    if start_epoch >= args.epochs:
-        if is_main_process:
-            print(f"[✓] Stage 1 target of {args.epochs} epochs has already been completed (found checkpoint at epoch {start_epoch}). Exiting Stage 1.")
-        return
-
     # 4. Build DataLoaders (with DistributedSampler across dual T4s)
     train_loader = build_kion_dataloader(
         manifest_path=args.manifest,
@@ -164,6 +159,19 @@ def main():
             num_workers=args.num_workers,
             is_distributed=False,
         )
+
+    # Reconcile epoch counter from global step (handles legacy checkpoints affected by step-checkpoint off-by-one)
+    if start_step > 0 and len(train_loader) > 0:
+        expected_epoch = start_step // len(train_loader)
+        if start_epoch != expected_epoch:
+            if is_main_process:
+                print(f"[*] Reconciling epoch counter: checkpoint recorded epoch {start_epoch}, but global_step {start_step} corresponds to epoch {expected_epoch} ({start_step} // {len(train_loader)} steps). Resuming at epoch {expected_epoch}.")
+            start_epoch = expected_epoch
+
+    if start_epoch >= args.epochs:
+        if is_main_process:
+            print(f"[✓] Stage 1 target of {args.epochs} epochs has already been completed (found checkpoint at epoch {start_epoch}). Exiting Stage 1.")
+        return
 
     # 5. Initialize Production Trainer
     trainer = KionProductionTrainer(

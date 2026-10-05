@@ -491,6 +491,13 @@ class KionProductionTrainer:
                 for p in mod.parameters():
                     p.requires_grad = False
 
+        if start_step > 0 and len(train_loader) > 0:
+            expected_epoch = start_step // len(train_loader)
+            if start_epoch != expected_epoch:
+                if self.is_main_process:
+                    print(f"[*] Reconciling epoch counter: checkpoint recorded epoch {start_epoch}, but global_step {start_step} corresponds to epoch {expected_epoch} ({start_step} // {len(train_loader)} steps). Resuming at epoch {expected_epoch}.")
+                start_epoch = expected_epoch
+
         if start_epoch >= epochs:
             if self.is_main_process:
                 print(f"[✓] Stage 1 target epochs already achieved ({start_epoch}/{epochs}). Skipping Stage 1 training.")
@@ -524,17 +531,17 @@ class KionProductionTrainer:
                 self.opt_bert.zero_grad()
 
             batches_in_epoch = len(train_loader)
-            max_steps_this_epoch = batches_in_epoch
+            steps_to_skip = 0
             if epoch == start_epoch and start_step > 0:
                 steps_done_in_epoch = start_step % batches_in_epoch
                 if steps_done_in_epoch > 0:
-                    max_steps_this_epoch = batches_in_epoch - steps_done_in_epoch
+                    steps_to_skip = steps_done_in_epoch
                     if self.is_main_process:
-                        print(f"[*] Resuming mid-epoch: executing remaining {max_steps_this_epoch} steps to complete Epoch {epoch+1} (Global step {global_step})...")
+                        print(f"[*] Resuming mid-epoch: fast-forwarding past {steps_to_skip} already-trained batches to resume Epoch {epoch+1} at step {steps_to_skip+1}/{batches_in_epoch} (Global step {global_step})...")
 
             for step, batch in enumerate(train_loader):
-                if step >= max_steps_this_epoch:
-                    break
+                if step < steps_to_skip:
+                    continue
 
                 waves, texts, input_lengths, mels, output_lengths, ref_mels, tag_vectors, paths = batch
 
@@ -648,7 +655,7 @@ class KionProductionTrainer:
 
                 # Backward pass with no_sync during accumulation steps
                 # Sequential deterministic backward passes to eliminate inter-module DDP collective race conditions:
-                is_accumulating = ((step + 1) % self.accum_steps != 0) and ((step + 1) != max_steps_this_epoch)
+                is_accumulating = ((step + 1) % self.accum_steps != 0) and ((step + 1) != batches_in_epoch)
                 sync_ctx = maybe_no_sync(
                     [self.tag_encoder, self.model.get("bert"), self.model.get("bert_encoder")],
                     enabled=(self.is_distributed and is_accumulating)
@@ -661,7 +668,7 @@ class KionProductionTrainer:
                     loss_pred_scaled = loss_predictor / self.accum_steps
                     self.scaler.scale(loss_pred_scaled).backward()
 
-                if (step + 1) % self.accum_steps == 0 or (step + 1) == max_steps_this_epoch:
+                if (step + 1) % self.accum_steps == 0 or (step + 1) == batches_in_epoch:
                     self.scaler.unscale_(self.opt_tag)
                     self.scaler.unscale_(self.opt_pred)
                     if self.opt_bert:
@@ -706,6 +713,7 @@ class KionProductionTrainer:
                 global_step += 1
 
                 # Periodic step-interval checkpoint saving & HF sync (main process only)
+                # Note: Mid-epoch step checkpoints save current active epoch, NOT epoch + 1
                 if save_step_freq > 0 and global_step % save_step_freq == 0:
                     if self.is_main_process:
                         save_models = {
@@ -724,7 +732,7 @@ class KionProductionTrainer:
                         print(f"\n[*] Periodic Step Checkpoint: Step {global_step} (Epoch {epoch+1}). Syncing to HF Hub...")
                         self.ckpt_manager.save_checkpoint(
                             stage="stage1",
-                            epoch=epoch + 1,
+                            epoch=epoch,
                             step=global_step,
                             models=save_models,
                             optimizers=save_opts,
@@ -735,14 +743,15 @@ class KionProductionTrainer:
                     if self.is_distributed and torch.distributed.is_initialized():
                         torch.distributed.barrier()
 
-                # Responsive progress logging (every 5 steps, step 0, or end of epoch)
-                log_freq = max(1, min(5, max_steps_this_epoch // 5))
-                if self.is_main_process and (step == 0 or (step + 1) % log_freq == 0 or (step + 1) == max_steps_this_epoch):
+                # Responsive progress logging (every 5 steps, first active step, or end of epoch)
+                log_freq = max(1, min(5, batches_in_epoch // 5))
+                if self.is_main_process and (step == steps_to_skip or (step + 1) % log_freq == 0 or (step + 1) == batches_in_epoch):
                     elapsed = max(time.time() - epoch_start_time, 1e-3)
-                    it_per_sec = (step + 1) / elapsed
-                    eta_sec = (max_steps_this_epoch - (step + 1)) / max(it_per_sec, 1e-3)
+                    steps_done_session = max(1, (step + 1) - steps_to_skip)
+                    it_per_sec = steps_done_session / elapsed
+                    eta_sec = (batches_in_epoch - (step + 1)) / max(it_per_sec, 1e-3)
                     print(
-                        f"Epoch [{epoch+1:02d}/{epochs}] Step [{step+1:03d}/{max_steps_this_epoch}] (Global: {global_step}) "
+                        f"Epoch [{epoch+1:02d}/{epochs}] Step [{step+1:03d}/{batches_in_epoch}] (Global: {global_step}) "
                         f"StyleLoss: {loss_style.item():.4f} | "
                         f"F0Loss: {loss_f0.item():.4f} | "
                         f"NormLoss: {loss_norm.item():.4f} | "
@@ -854,6 +863,13 @@ class KionProductionTrainer:
             for p in list(mpd_mod.parameters()) + list(msd_mod.parameters()):
                 p.requires_grad = True
 
+        if start_step > 0 and len(train_loader) > 0:
+            expected_epoch = start_step // len(train_loader)
+            if start_epoch != expected_epoch:
+                if self.is_main_process:
+                    print(f"[*] Reconciling epoch counter: checkpoint recorded epoch {start_epoch}, but global_step {start_step} corresponds to epoch {expected_epoch} ({start_step} // {len(train_loader)} steps). Resuming at epoch {expected_epoch}.")
+                start_epoch = expected_epoch
+
         if start_epoch >= epochs:
             if self.is_main_process:
                 print(f"[✓] Stage 2 target epochs already achieved ({start_epoch}/{epochs}). Skipping Stage 2 training.")
@@ -903,17 +919,17 @@ class KionProductionTrainer:
                 self.opt_disc.zero_grad(set_to_none=True)
 
             batches_in_epoch = len(train_loader)
-            max_steps_this_epoch = batches_in_epoch
+            steps_to_skip = 0
             if epoch == start_epoch and start_step > 0:
                 steps_done_in_epoch = start_step % batches_in_epoch
                 if steps_done_in_epoch > 0:
-                    max_steps_this_epoch = batches_in_epoch - steps_done_in_epoch
+                    steps_to_skip = steps_done_in_epoch
                     if self.is_main_process:
-                        print(f"[*] Resuming mid-epoch: executing remaining {max_steps_this_epoch} steps to complete Epoch {epoch+1} (Global step {global_step})...")
+                        print(f"[*] Resuming mid-epoch: fast-forwarding past {steps_to_skip} already-trained batches to resume Epoch {epoch+1} at step {steps_to_skip+1}/{batches_in_epoch} (Global step {global_step})...")
 
             for step, batch in enumerate(train_loader):
-                if step >= max_steps_this_epoch:
-                    break
+                if step < steps_to_skip:
+                    continue
 
                 waves, texts, input_lengths, mels, output_lengths, ref_mels, tag_vectors, paths = batch
 
@@ -1054,7 +1070,7 @@ class KionProductionTrainer:
 
                 # ── Step C: Generator Backward & Accumulation ──
                 # Sequential deterministic backward passes to eliminate inter-module DDP collective race conditions:
-                is_accumulating = ((step + 1) % self.accum_steps != 0) and ((step + 1) != max_steps_this_epoch)
+                is_accumulating = ((step + 1) % self.accum_steps != 0) and ((step + 1) != batches_in_epoch)
                 sync_ctx_g = maybe_no_sync(
                     [self.tag_encoder, self.model.get("decoder"), self.model.get("bert_encoder"), self.model.get("bert")],
                     enabled=(self.is_distributed and is_accumulating)
@@ -1079,7 +1095,7 @@ class KionProductionTrainer:
                     with sync_ctx_d:
                         self.scaler_d.scale(loss_d_total).backward()
 
-                if (step + 1) % self.accum_steps == 0 or (step + 1) == max_steps_this_epoch:
+                if (step + 1) % self.accum_steps == 0 or (step + 1) == batches_in_epoch:
                     self.scaler.unscale_(self.opt_tag)
                     self.scaler.unscale_(self.opt_pred)
                     if self.opt_dec:
@@ -1140,6 +1156,7 @@ class KionProductionTrainer:
                 global_step += 1
 
                 # Periodic step-interval checkpoint saving & HF sync (main process only)
+                # Note: Mid-epoch step checkpoints save current active epoch, NOT epoch + 1
                 if save_step_freq > 0 and global_step % save_step_freq == 0:
                     if self.is_main_process:
                         save_models = {
@@ -1164,7 +1181,7 @@ class KionProductionTrainer:
                         print(f"\n[*] Periodic Step Checkpoint: Step {global_step} (Epoch {epoch+1}). Syncing to HF Hub...")
                         self.ckpt_manager.save_checkpoint(
                             stage="stage2",
-                            epoch=epoch + 1,
+                            epoch=epoch,
                             step=global_step,
                             models=save_models,
                             optimizers=save_opts,
@@ -1175,14 +1192,15 @@ class KionProductionTrainer:
                     if self.is_distributed and torch.distributed.is_initialized():
                         torch.distributed.barrier()
 
-                # Responsive progress logging (every 5 steps, step 0, or end of epoch)
-                log_freq = max(1, min(5, max_steps_this_epoch // 5))
-                if self.is_main_process and (step == 0 or (step + 1) % log_freq == 0 or (step + 1) == max_steps_this_epoch):
+                # Responsive progress logging (every 5 steps, first active step, or end of epoch)
+                log_freq = max(1, min(5, batches_in_epoch // 5))
+                if self.is_main_process and (step == steps_to_skip or (step + 1) % log_freq == 0 or (step + 1) == batches_in_epoch):
                     elapsed = max(time.time() - epoch_start_time, 1e-3)
-                    it_per_sec = (step + 1) / elapsed
-                    eta_sec = (max_steps_this_epoch - (step + 1)) / max(it_per_sec, 1e-3)
+                    steps_done_session = max(1, (step + 1) - steps_to_skip)
+                    it_per_sec = steps_done_session / elapsed
+                    eta_sec = (batches_in_epoch - (step + 1)) / max(it_per_sec, 1e-3)
                     print(
-                        f"Stage2 Epoch [{epoch+1:02d}/{epochs}] Step [{step+1:03d}/{max_steps_this_epoch}] (Global: {global_step}) "
+                        f"Stage2 Epoch [{epoch+1:02d}/{epochs}] Step [{step+1:03d}/{batches_in_epoch}] (Global: {global_step}) "
                         f"STFTLoss: {loss_stft.item():.4f} | "
                         f"GenLoss: {loss_gen.item():.4f} | "
                         f"DiscLoss: {loss_d_total.item():.4f} | "
