@@ -632,9 +632,14 @@ class KionProductionTrainer:
                     loss_step = (loss_style * 2.0 + loss_predictor) / self.accum_steps
 
                 # NaN/Inf guard: skip step if invalid to preserve model parameters
-                if torch.isnan(loss_step) or torch.isinf(loss_step):
+                # In distributed multi-GPU mode, any skip decision MUST be synchronized across all ranks!
+                skip_step = torch.tensor(1.0 if not torch.isfinite(loss_step) else 0.0, device=self.device)
+                if self.is_distributed:
+                    torch.distributed.all_reduce(skip_step, op=torch.distributed.ReduceOp.MAX)
+
+                if skip_step.item() > 0.0:
                     if self.is_main_process:
-                        print(f"  [!] Notice: NaN/Inf detected at step {step+1}. Skipping optimizer update.")
+                        print(f"  [!] Notice: Non-finite loss detected at step {step+1}. Skipping optimizer update across all ranks.")
                     self.opt_tag.zero_grad(set_to_none=True)
                     self.opt_pred.zero_grad(set_to_none=True)
                     if self.opt_bert:
@@ -657,16 +662,20 @@ class KionProductionTrainer:
                         self.scaler.unscale_(self.opt_bert)
 
                     # Explicitly synchronize predictor gradients across distributed ranks (single coalesced all_reduce)
+                    # Use requires_grad so all ranks construct identical flat_grad tensors regardless of dynamic activation
                     if self.is_distributed and "predictor" in self.model and self.model["predictor"] is not None:
-                        pred_grads = [p.grad.data for p in self.model["predictor"].parameters() if p.grad is not None]
-                        if pred_grads:
-                            flat_grad = torch.cat([g.reshape(-1) for g in pred_grads])
+                        pred_params = [p for p in self.model["predictor"].parameters() if p.requires_grad]
+                        if pred_params:
+                            for p in pred_params:
+                                if p.grad is None:
+                                    p.grad = torch.zeros_like(p.data)
+                            flat_grad = torch.cat([p.grad.data.reshape(-1) for p in pred_params])
                             torch.distributed.all_reduce(flat_grad, op=torch.distributed.ReduceOp.SUM)
                             flat_grad.div_(self.world_size)
                             offset = 0
-                            for g in pred_grads:
-                                numel = g.numel()
-                                g.copy_(flat_grad[offset:offset + numel].reshape(g.shape))
+                            for p in pred_params:
+                                numel = p.grad.data.numel()
+                                p.grad.data.copy_(flat_grad[offset:offset + numel].reshape(p.grad.data.shape))
                                 offset += numel
 
                     torch.nn.utils.clip_grad_norm_(self.tag_encoder.parameters(), max_norm=5.0)
@@ -954,6 +963,11 @@ class KionProductionTrainer:
 
                 # ── Step B: Sliced Real Audio & Decoder Forward ──
                 win_len = min(dec_window, int(mel_input_length.min().item() - 1))
+                if self.is_distributed:
+                    win_len_t = torch.tensor(win_len, device=self.device)
+                    torch.distributed.all_reduce(win_len_t, op=torch.distributed.ReduceOp.MIN)
+                    win_len = int(win_len_t.item())
+
                 if win_len < 10:
                     continue
 
@@ -1014,10 +1028,14 @@ class KionProductionTrainer:
 
                     loss_g_total = (loss_stft * 2.5 + loss_gen * 1.0 + loss_style * 1.0 + loss_f0_rec + loss_norm_rec) / self.accum_steps
 
-                # NaN/Inf guard
-                if torch.isnan(loss_g_total) or torch.isinf(loss_g_total):
+                # NaN/Inf guard synchronized across distributed ranks
+                skip_g = torch.tensor(1.0 if not torch.isfinite(loss_g_total) else 0.0, device=self.device)
+                if self.is_distributed:
+                    torch.distributed.all_reduce(skip_g, op=torch.distributed.ReduceOp.MAX)
+
+                if skip_g.item() > 0.0:
                     if self.is_main_process:
-                        print(f"  [!] Notice: NaN/Inf detected in loss_g_total at step {step+1}. Skipping optimizer update.")
+                        print(f"  [!] Notice: Non-finite loss detected in loss_g_total at step {step+1}. Skipping optimizer update across all ranks.")
                     self.opt_tag.zero_grad(set_to_none=True)
                     self.opt_pred.zero_grad(set_to_none=True)
                     if self.opt_dec:
@@ -1058,16 +1076,20 @@ class KionProductionTrainer:
                         self.scaler.unscale_(self.opt_bert)
 
                     # Explicitly synchronize predictor gradients across distributed ranks (single coalesced all_reduce)
+                    # Use requires_grad so all ranks construct identical flat_grad tensors regardless of dynamic activation
                     if self.is_distributed and "predictor" in self.model and self.model["predictor"] is not None:
-                        pred_grads = [p.grad.data for p in self.model["predictor"].parameters() if p.grad is not None]
-                        if pred_grads:
-                            flat_grad = torch.cat([g.reshape(-1) for g in pred_grads])
+                        pred_params = [p for p in self.model["predictor"].parameters() if p.requires_grad]
+                        if pred_params:
+                            for p in pred_params:
+                                if p.grad is None:
+                                    p.grad = torch.zeros_like(p.data)
+                            flat_grad = torch.cat([p.grad.data.reshape(-1) for p in pred_params])
                             torch.distributed.all_reduce(flat_grad, op=torch.distributed.ReduceOp.SUM)
                             flat_grad.div_(self.world_size)
                             offset = 0
-                            for g in pred_grads:
-                                numel = g.numel()
-                                g.copy_(flat_grad[offset:offset + numel].reshape(g.shape))
+                            for p in pred_params:
+                                numel = p.grad.data.numel()
+                                p.grad.data.copy_(flat_grad[offset:offset + numel].reshape(p.grad.data.shape))
                                 offset += numel
 
                     torch.nn.utils.clip_grad_norm_(self.tag_encoder.parameters(), max_norm=5.0)

@@ -9,6 +9,8 @@ Trains:
 
 import os
 import sys
+# Prevent CUDA memory fragmentation on 15GB/16GB GPUs
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 import argparse
 import yaml
 import torch
