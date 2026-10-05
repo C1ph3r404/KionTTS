@@ -101,7 +101,11 @@ def main():
             local_rank = 0
         torch.cuda.set_device(local_rank)
         if not torch.distributed.is_initialized():
-            torch.distributed.init_process_group(backend="nccl")
+            import datetime
+            torch.distributed.init_process_group(
+                backend="nccl",
+                timeout=datetime.timedelta(minutes=60),
+            )
         device = f"cuda:{local_rank}"
     else:
         device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -211,6 +215,8 @@ def main():
             dec_window=args.dec_window,
         )
     finally:
+        if is_main_process and hasattr(ckpt_manager, "wait_for_uploads"):
+            ckpt_manager.wait_for_uploads()
         if is_distributed and torch.distributed.is_initialized():
             torch.distributed.destroy_process_group()
 

@@ -759,8 +759,15 @@ class KionProductionTrainer:
                         f"{it_per_sec:.2f} it/s (ETA: {int(eta_sec)}s)"
                     )
 
-            avg_style = total_style_loss / max(1, num_batches)
-            avg_pred = total_pred_loss / max(1, num_batches)
+            # Synchronize metrics across all distributed ranks to guarantee identical loss and checkpoint decisions
+            if self.is_distributed and torch.distributed.is_initialized():
+                loss_tensor = torch.tensor([total_style_loss, total_pred_loss, float(num_batches)], device=self.device)
+                torch.distributed.all_reduce(loss_tensor, op=torch.distributed.ReduceOp.SUM)
+                avg_style = (loss_tensor[0] / max(1.0, loss_tensor[2])).item()
+                avg_pred = (loss_tensor[1] / max(1.0, loss_tensor[2])).item()
+            else:
+                avg_style = total_style_loss / max(1, num_batches)
+                avg_pred = total_pred_loss / max(1, num_batches)
             epoch_loss = avg_style + avg_pred
             epoch_time = time.time() - epoch_start_time
 
@@ -777,12 +784,13 @@ class KionProductionTrainer:
                     self.writer.add_scalar("Stage1/PredictorLoss", avg_pred, epoch + 1)
                     self.writer.add_scalar("Stage1/TotalLoss", epoch_loss, epoch + 1)
 
-            # Checkpoint saving & remote sync (main process only)
+            # Checkpoint saving & remote sync (evaluates identically across all ranks)
             is_best = epoch_loss < best_loss
             if is_best:
                 best_loss = epoch_loss
 
-            if (epoch + 1) % save_freq == 0 or is_best or (epoch + 1) == epochs:
+            should_save = ((epoch + 1) % save_freq == 0) or is_best or ((epoch + 1) == epochs)
+            if should_save:
                 if self.is_main_process:
                     save_models = {
                         "tag_encoder": self.tag_encoder,
@@ -814,6 +822,9 @@ class KionProductionTrainer:
 
         if self.is_main_process:
             print("[✓] Stage 1 Training Completed Successfully!")
+            if hasattr(self.ckpt_manager, "wait_for_uploads"):
+                print("[*] Waiting for pending background Hugging Face Hub uploads...")
+                self.ckpt_manager.wait_for_uploads()
 
     def train_stage2(
         self,
@@ -1208,9 +1219,17 @@ class KionProductionTrainer:
                         f"{it_per_sec:.2f} it/s (ETA: {int(eta_sec)}s)"
                     )
 
-            avg_stft = total_stft_loss / max(1, num_batches)
-            avg_gen = total_gen_loss / max(1, num_batches)
-            avg_disc = total_disc_loss / max(1, num_batches)
+            # Synchronize metrics across all distributed ranks to guarantee identical loss and checkpoint decisions
+            if self.is_distributed and torch.distributed.is_initialized():
+                loss_tensor = torch.tensor([total_stft_loss, total_gen_loss, total_disc_loss, float(num_batches)], device=self.device)
+                torch.distributed.all_reduce(loss_tensor, op=torch.distributed.ReduceOp.SUM)
+                avg_stft = (loss_tensor[0] / max(1.0, loss_tensor[3])).item()
+                avg_gen = (loss_tensor[1] / max(1.0, loss_tensor[3])).item()
+                avg_disc = (loss_tensor[2] / max(1.0, loss_tensor[3])).item()
+            else:
+                avg_stft = total_stft_loss / max(1, num_batches)
+                avg_gen = total_gen_loss / max(1, num_batches)
+                avg_disc = total_disc_loss / max(1, num_batches)
             epoch_loss = avg_stft + avg_gen
             epoch_time = time.time() - epoch_start_time
 
@@ -1227,12 +1246,13 @@ class KionProductionTrainer:
                     self.writer.add_scalar("Stage2/GenLoss", avg_gen, epoch + 1)
                     self.writer.add_scalar("Stage2/DiscLoss", avg_disc, epoch + 1)
 
-            # Checkpoint saving & remote sync (main process only)
+            # Checkpoint saving & remote sync (evaluates identically across all ranks)
             is_best = epoch_loss < best_loss
             if is_best:
                 best_loss = epoch_loss
 
-            if (epoch + 1) % save_freq == 0 or is_best or (epoch + 1) == epochs:
+            should_save = ((epoch + 1) % save_freq == 0) or is_best or ((epoch + 1) == epochs)
+            if should_save:
                 if self.is_main_process:
                     save_models = {
                         "tag_encoder": self.tag_encoder,
@@ -1270,6 +1290,9 @@ class KionProductionTrainer:
 
         if self.is_main_process:
             print("[✓] Stage 2 Training Completed Successfully!")
+            if hasattr(self.ckpt_manager, "wait_for_uploads"):
+                print("[*] Waiting for pending background Hugging Face Hub uploads...")
+                self.ckpt_manager.wait_for_uploads()
 
 
 def run_training_pipeline(

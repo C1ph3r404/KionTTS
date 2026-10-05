@@ -110,3 +110,42 @@ There were two coupled causes that triggered at `joint_epoch = 50`:
           del model[unused_k]
   ```
 * **Purge VRAM at cell entry**: Explicitly call `gc.collect()` and `torch.cuda.empty_cache()` before starting training pipelines in notebook cells.
+
+---
+
+## 6. DDP Collective Desynchronization on `is_best` & NCCL 10-Minute Timeout
+
+### What Happened
+At the end of Stage 1 Epoch 19 (Step 1720/1720, Global Step 32680), the dual-GPU training job crashed with an NCCL watchdog timeout:
+```
+[rank1]: Watchdog caught collective operation timeout: WorkNCCL(SeqNum=133305, OpType=ALLREDUCE, NumelIn=1, NumelOut=1, Timeout(ms)=600000) ran for 600035 milliseconds before timing out.
+[rank0]: Watchdog caught collective operation timeout: WorkNCCL(SeqNum=133307, OpType=ALLREDUCE, NumelIn=46784, NumelOut=46784, Timeout(ms)=600000)
+```
+There were two coupled root causes:
+
+1. **Unsynchronized `is_best` Causing Collective Desynchronization**:
+   * In multi-GPU DDP training with `DistributedSampler`, each rank computes metrics only over its local subset of batches.
+   * `avg_style`, `avg_pred`, and `epoch_loss` were calculated locally on each rank without cross-rank `all_reduce`.
+   * At Epoch 19, `epoch_loss < best_loss` (`is_best`) evaluated differently between ranks (e.g. `True` on Rank 0, but `False` on Rank 1).
+   * Rank 0 entered the checkpoint saving block and executed `torch.distributed.barrier()`, whereas Rank 1 skipped it and proceeded directly to Epoch 20, calling `torch.distributed.all_reduce(skip_step)`.
+   * The barrier (an internal 1-element all-reduce) and `skip_step` all-reduce matched across ranks with mismatched semantics. Subsequent collective sequence numbers and tensor shapes diverged (`NumelIn=1` vs `NumelIn=46784`), causing collective order deadlock.
+
+2. **Synchronous Remote Uploads Blocking the DDP Barrier**:
+   * `save_checkpoint(..., upload_hf=True)` performed synchronous HTTP uploads of multiple ~500MB `.pth` files (`step`, `latest`, `best`) and sample audio on Rank 0 while other ranks waited at `torch.distributed.barrier()`.
+   * When remote uploads or network latency exceeded PyTorch's default 10-minute (600,000 ms) NCCL watchdog limit, the watchdog thread aborted all worker processes.
+
+### Rule for Future Runs
+* **Always synchronize epoch metrics across distributed ranks**:
+  ```python
+  loss_tensor = torch.tensor([total_style_loss, total_pred_loss, float(num_batches)], device=self.device)
+  torch.distributed.all_reduce(loss_tensor, op=torch.distributed.ReduceOp.SUM)
+  avg_style = (loss_tensor[0] / max(1.0, loss_tensor[2])).item()
+  avg_pred = (loss_tensor[1] / max(1.0, loss_tensor[2])).item()
+  epoch_loss = avg_style + avg_pred
+  ```
+  This guarantees `is_best` and save decisions evaluate 100% identically across all ranks.
+* **Make remote Hugging Face Hub checkpoint uploads asynchronous**:
+  * Save checkpoints locally to disk in 1–2 seconds with `torch.save()`.
+  * Offload remote Hub synchronization and audio sample uploads to a background `ThreadPoolExecutor` worker so GPUs immediately proceed with training.
+* **Extend NCCL Watchdog Timeout**:
+  * Set `timeout=datetime.timedelta(minutes=60)` in `torch.distributed.init_process_group` to prevent premature job failure during large I/O or evaluation phases.

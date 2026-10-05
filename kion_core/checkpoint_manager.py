@@ -8,6 +8,7 @@ import os
 import glob
 import re
 import shutil
+from concurrent.futures import ThreadPoolExecutor
 import torch
 from typing import Dict, Any, Optional, List
 
@@ -78,6 +79,7 @@ class KionCheckpointManager:
         self.keep_last_n = keep_last_n
 
         self.api = None
+        self._executor = ThreadPoolExecutor(max_workers=1)
         if self.hf_token:
             try:
                 from huggingface_hub import HfApi
@@ -91,6 +93,32 @@ class KionCheckpointManager:
                 print(f"[-] Hugging Face Hub library not available or failed to initialize: {e}")
         else:
             print("[*] HF_TOKEN not detected. Checkpoints will be saved locally.")
+
+    def _async_sync_checkpoint(
+        self,
+        stage: str,
+        step_path: str,
+        step_filename: str,
+        latest_path: str,
+        latest_filename: str,
+        pointer_path: str,
+        is_best: bool,
+        best_path: Optional[str] = None,
+    ):
+        """Worker function running in a background thread to sync checkpoints to Hugging Face Hub."""
+        if not self.api:
+            return
+        try:
+            print(f"[*] [Background HF Sync] Uploading {step_filename}...")
+            self._upload_file(step_path, step_filename)
+            self._upload_file(latest_path, latest_filename)
+            self._upload_file(pointer_path, f"latest_{stage}_checkpoint.txt")
+            if is_best and best_path and os.path.exists(best_path):
+                self._upload_file(best_path, f"kion_{stage}_best.pth")
+            self.prune_hf_checkpoints(stage=stage)
+            print(f"[✓] [Background HF Sync] Completed sync for {step_filename}.")
+        except Exception as e:
+            print(f"[!] Warning during background HF sync: {e}")
 
     def save_checkpoint(
         self,
@@ -146,6 +174,7 @@ class KionCheckpointManager:
         with open(pointer_path, "w") as f:
             f.write(step_filename)
 
+        best_path = None
         if is_best:
             best_filename = f"kion_{stage}_best.pth"
             best_path = os.path.join(self.checkpoint_dir, best_filename)
@@ -155,14 +184,20 @@ class KionCheckpointManager:
         # Local pruning
         self.prune_local_checkpoints(stage=stage)
 
-        # Remote sync to Hugging Face Hub
+        # Remote sync to Hugging Face Hub (asynchronous in background thread to prevent GPU stall & NCCL timeouts)
         if upload_hf and self.api:
-            self._upload_file(step_path, step_filename)
-            self._upload_file(latest_path, latest_filename)
-            self._upload_file(pointer_path, f"latest_{stage}_checkpoint.txt")
-            if is_best:
-                self._upload_file(best_path, f"kion_{stage}_best.pth")
-            self.prune_hf_checkpoints(stage=stage)
+            print(f"[*] Queued background Hugging Face Hub sync for: {step_filename}")
+            self._executor.submit(
+                self._async_sync_checkpoint,
+                stage,
+                step_path,
+                step_filename,
+                latest_path,
+                latest_filename,
+                pointer_path,
+                is_best,
+                best_path,
+            )
 
         return step_path
 
@@ -180,11 +215,21 @@ class KionCheckpointManager:
             print(f"[!] Warning: Failed uploading {repo_filename} to HF: {e}")
 
     def upload_sample_audio(self, local_wav_path: str, repo_filename: Optional[str] = None):
-        """Uploads a synthesized audio evaluation sample to Hugging Face Hub under samples/."""
+        """Uploads a synthesized audio evaluation sample to Hugging Face Hub under samples/ asynchronously."""
         if not self.api or not os.path.exists(local_wav_path):
             return
         target_name = repo_filename or f"samples/{os.path.basename(local_wav_path)}"
-        self._upload_file(local_wav_path, target_name)
+        self._executor.submit(self._upload_file, local_wav_path, target_name)
+
+    def wait_for_uploads(self):
+        """Waits for all pending background Hugging Face uploads to finish."""
+        if hasattr(self, "_executor") and self._executor is not None:
+            self._executor.shutdown(wait=True)
+            self._executor = ThreadPoolExecutor(max_workers=1)
+
+    def close(self):
+        """Gracefully waits for background uploads and closes executor."""
+        self.wait_for_uploads()
 
     def load_checkpoint(
         self,
