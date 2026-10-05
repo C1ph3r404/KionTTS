@@ -280,7 +280,7 @@ class KionProductionTrainer:
                             self.model[k],
                             device_ids=[dev_idx],
                             output_device=dev_idx,
-                            find_unused_parameters=False,
+                            find_unused_parameters=True,
                         )
 
             if not isinstance(self.tag_encoder, torch.nn.parallel.DistributedDataParallel):
@@ -288,7 +288,7 @@ class KionProductionTrainer:
                     self.tag_encoder,
                     device_ids=[dev_idx],
                     output_device=dev_idx,
-                    find_unused_parameters=False,
+                    find_unused_parameters=True,
                 )
 
             # Ensure predictor parameters are synchronized across ranks at stage start
@@ -590,7 +590,7 @@ class KionProductionTrainer:
                     d_en = self.model["bert_encoder"](bert_dur).transpose(-1, -2)
 
                     # 4. Prosody Prediction Loss (Computed in FP32 to prevent LSTM FP16 overflow)
-                    cond_style = s_tag[:, 128:] if (step % 2 == 0) else s_prosody_gt
+                    cond_style = s_tag[:, 128:].detach() if (step % 2 == 0) else s_prosody_gt
                     cond_style_f32 = torch.nan_to_num(cond_style.float(), nan=0.0, posinf=1.0, neginf=-1.0).clamp(-10.0, 10.0)
                     d_en_f32 = torch.nan_to_num(d_en.float(), nan=0.0).clamp(-50.0, 50.0)
 
@@ -647,13 +647,19 @@ class KionProductionTrainer:
                     continue
 
                 # Backward pass with no_sync during accumulation steps
+                # Sequential deterministic backward passes to eliminate inter-module DDP collective race conditions:
                 is_accumulating = ((step + 1) % self.accum_steps != 0) and ((step + 1) != max_steps_this_epoch)
                 sync_ctx = maybe_no_sync(
                     [self.tag_encoder, self.model.get("bert"), self.model.get("bert_encoder")],
                     enabled=(self.is_distributed and is_accumulating)
                 )
                 with sync_ctx:
-                    self.scaler.scale(loss_step).backward()
+                    # Pass 1: Tag Style Encoder alignment (touches ONLY self.tag_encoder)
+                    loss_style_scaled = (loss_style * 2.0) / self.accum_steps
+                    self.scaler.scale(loss_style_scaled).backward()
+                    # Pass 2: Prosody Predictor & BERT adaptation (touches ONLY predictor -> bert_encoder -> bert)
+                    loss_pred_scaled = loss_predictor / self.accum_steps
+                    self.scaler.scale(loss_pred_scaled).backward()
 
                 if (step + 1) % self.accum_steps == 0 or (step + 1) == max_steps_this_epoch:
                     self.scaler.unscale_(self.opt_tag)
@@ -958,7 +964,7 @@ class KionProductionTrainer:
                     bert_dur = self.model["bert"](texts, attention_mask=(~text_mask).int())
                     d_en = self.model["bert_encoder"](bert_dur).transpose(-1, -2)
 
-                    cond_style = s_tag[:, 128:]
+                    cond_style = s_tag[:, 128:].detach()
                     d, p = self.model["predictor"](d_en, cond_style, input_lengths, s2s_attn_mono, text_mask)
 
                 # ── Step B: Sliced Real Audio & Decoder Forward ──
@@ -1002,7 +1008,7 @@ class KionProductionTrainer:
                 en_sub = torch.cat(en_slices, dim=0)
                 p_sub = torch.cat(p_slices, dim=0)
                 gt_sub = torch.cat(mel_slices, dim=0)
-                ref_sub = s_tag[:, :128]
+                ref_sub = s_tag[:, :128].detach()
 
                 with torch.no_grad():
                     F0_real = extract_f0_safe(self.model["pitch_extractor"], gt_sub.unsqueeze(1))
@@ -1047,13 +1053,19 @@ class KionProductionTrainer:
                     continue
 
                 # ── Step C: Generator Backward & Accumulation ──
+                # Sequential deterministic backward passes to eliminate inter-module DDP collective race conditions:
                 is_accumulating = ((step + 1) % self.accum_steps != 0) and ((step + 1) != max_steps_this_epoch)
                 sync_ctx_g = maybe_no_sync(
                     [self.tag_encoder, self.model.get("decoder"), self.model.get("bert_encoder"), self.model.get("bert")],
                     enabled=(self.is_distributed and is_accumulating)
                 )
                 with sync_ctx_g:
-                    self.scaler.scale(loss_g_total).backward()
+                    # Pass 1: Tag Style Encoder alignment (touches ONLY self.tag_encoder)
+                    loss_style_scaled = (loss_style * 1.0) / self.accum_steps
+                    self.scaler.scale(loss_style_scaled).backward()
+                    # Pass 2: Full-Stack Vocoder & Predictor Loss (touches decoder, bert_encoder, bert)
+                    loss_g_acoustic = (loss_stft * 2.5 + loss_gen * 1.0 + loss_f0_rec + loss_norm_rec) / self.accum_steps
+                    self.scaler.scale(loss_g_acoustic).backward()
 
                 # ── Step D: Discriminator Backward & Accumulation ──
                 loss_d_total = torch.tensor(0.0, device=self.device)
