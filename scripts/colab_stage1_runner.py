@@ -35,6 +35,20 @@ _COLAB_REPO_DIR = "/content/KionTTS"
 _GITHUB_REPO    = "https://github.com/C1ph3r404/KionTTS.git"
 _IS_COLAB = os.path.exists("/content") and "COLAB_BACKEND_VERSION" in os.environ or os.path.exists("/content")
 
+# Ensure HF_TOKEN is set in the environment early so huggingface_hub picks it up.
+# When launched via `colab run ... --hf_token TOKEN`, sys.argv has the token.
+# We pull it out here before argparse runs so snapshot_download() is authenticated.
+def _extract_hf_token_from_argv():
+    for i, arg in enumerate(sys.argv):
+        if arg == "--hf_token" and i + 1 < len(sys.argv):
+            return sys.argv[i + 1]
+    return None
+
+_early_token = _extract_hf_token_from_argv() or os.environ.get("HF_TOKEN")
+if _early_token:
+    os.environ["HF_TOKEN"] = _early_token
+    os.environ["HUGGING_FACE_HUB_TOKEN"] = _early_token  # legacy compat
+
 if _IS_COLAB:
     if not os.path.exists(os.path.join(_COLAB_REPO_DIR, "kion_core")):
         print(f"[*] Colab VM detected. Cloning KionTTS repo to {_COLAB_REPO_DIR} ...")
