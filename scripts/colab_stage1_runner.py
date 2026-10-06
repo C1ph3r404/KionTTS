@@ -80,11 +80,32 @@ if STYLETTS_ROOT not in sys.path:
     sys.path.insert(0, STYLETTS_ROOT)
 
 
-def run_command(cmd, desc="Running command", check=True):
-    print(f"[*] {desc}...\n    > {cmd}")
-    res = subprocess.run(cmd, shell=True, capture_output=False)
-    if check and res.returncode != 0:
-        raise RuntimeError(f"Command failed with exit code {res.returncode}: {cmd}")
+# Path to the live log file readable via `colab exec` while main kernel is busy
+LIVE_LOG = "/content/kion_runner.log"
+TRAIN_LOG = "/content/training.log"
+
+
+def _tee_log(msg: str, log_path: str = LIVE_LOG):
+    """Append msg to log_path so `colab exec` can tail it for live output."""
+    try:
+        with open(log_path, "a") as f:
+            f.write(msg + "\n")
+            f.flush()
+    except Exception:
+        pass
+
+
+def run_command(cmd, desc="Running command", check=True, log_path: str = LIVE_LOG):
+    msg = f"[*] {desc}...\n    > {cmd}"
+    print(msg, flush=True)
+    _tee_log(msg, log_path)
+    # Tee subprocess output to both stdout and the log file
+    tee_cmd = f"{{ {cmd}; }} 2>&1 | tee -a {log_path}"
+    res = subprocess.run(tee_cmd, shell=True, capture_output=False)
+    if check and res.returncode not in (0, None):
+        err = f"[!] Command failed (exit {res.returncode}): {cmd}"
+        _tee_log(err, log_path)
+        raise RuntimeError(err)
     return res.returncode
 
 
@@ -395,7 +416,16 @@ def main():
         f"{'--fresh' if args.fresh else ''}"
     )
 
-    exit_code = run_command(cmd, "Executing Stage 1 Training")
+    # Training output goes to its own file so `colab exec` can tail it live:
+    #   colab exec -s <session> --timeout 30 -f /dev/stdin <<'EOF'
+    #   import subprocess; subprocess.run('tail -n 200 /content/training.log', shell=True)
+    #   EOF
+    train_cmd = f"{{ {cmd}; }} 2>&1 | tee -a {TRAIN_LOG}"
+    _tee_log(f"[*] Training log: {TRAIN_LOG}", LIVE_LOG)
+    _tee_log(f"[*] Training log: {TRAIN_LOG}", TRAIN_LOG)
+    print(f"[*] Live training log: {TRAIN_LOG}", flush=True)
+    res = subprocess.run(train_cmd, shell=True, capture_output=False)
+    exit_code = res.returncode
     if exit_code == 0:
         print("\n" + "=" * 75)
         print("[✓] STAGE 1 TRAINING & VERIFICATION COMPLETED SUCCESSFULLY!")
