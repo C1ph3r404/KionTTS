@@ -25,8 +25,54 @@ import argparse
 import subprocess
 from pathlib import Path
 
+# ---------------------------------------------------------------------------
+# BOOTSTRAP: When `colab run` uploads this script and executes it inside the
+# Colab VM's ipykernel, the VM has NO copy of the KionTTS repo — only this
+# single script file is transferred. We must clone the repo first so all
+# relative imports, configs, and sub-scripts resolve correctly.
+# ---------------------------------------------------------------------------
+_COLAB_REPO_DIR = "/content/KionTTS"
+_GITHUB_REPO    = "https://github.com/C1ph3r404/KionTTS.git"
+_IS_COLAB = os.path.exists("/content") and "COLAB_BACKEND_VERSION" in os.environ or os.path.exists("/content")
+
+if _IS_COLAB:
+    if not os.path.exists(os.path.join(_COLAB_REPO_DIR, "kion_core")):
+        print(f"[*] Colab VM detected. Cloning KionTTS repo to {_COLAB_REPO_DIR} ...")
+        ret = subprocess.run(
+            f"git clone --depth 1 {_GITHUB_REPO} {_COLAB_REPO_DIR}",
+            shell=True
+        )
+        if ret.returncode != 0:
+            raise RuntimeError(f"Failed to clone {_GITHUB_REPO}")
+        print(f"[✓] Repo cloned to {_COLAB_REPO_DIR}")
+    else:
+        print(f"[✓] KionTTS repo already present at {_COLAB_REPO_DIR}. Pulling latest ...")
+        subprocess.run(f"git -C {_COLAB_REPO_DIR} pull --ff-only", shell=True)
+    os.chdir(_COLAB_REPO_DIR)
+    print(f"[*] Working directory set to: {os.getcwd()}")
+
+
 # Add project root and StyleTTS2 to sys.path
-REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+# __file__ is not defined when running via Colab CLI (ipykernel context), so use a robust fallback.
+def _find_repo_root():
+    try:
+        # Standard Python script execution
+        return os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    except NameError:
+        pass
+    # Walk up from cwd looking for a known project marker
+    cwd = os.getcwd()
+    for d in [cwd, os.path.dirname(cwd)]:
+        d = os.path.abspath(d)
+        if os.path.exists(os.path.join(d, "kion_core")) or os.path.exists(os.path.join(d, "StyleTTS2")):
+            return d
+    # Colab default clone paths
+    for candidate in ["/content/KionTTS", "/content/drive/MyDrive/KionTTS"]:
+        if os.path.exists(candidate):
+            return candidate
+    return cwd
+
+REPO_ROOT = _find_repo_root()
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 STYLETTS_ROOT = os.path.join(REPO_ROOT, "StyleTTS2")
