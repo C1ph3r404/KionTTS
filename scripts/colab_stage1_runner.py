@@ -131,21 +131,125 @@ def setup_colab_environment():
     run_command(f"pip install -q {' '.join(pkgs)}", "Installing required Python packages")
 
 
-def mount_google_drive():
-    """Mounts Google Drive at /content/drive if not already mounted."""
-    drive_mount_point = "/content/drive"
-    if os.path.exists(os.path.join(drive_mount_point, "MyDrive")):
-        print(f"[✓] Google Drive is already mounted at {drive_mount_point}")
-        return drive_mount_point
+def download_dataset_from_hf(
+    hf_dataset_repo: str,
+    hf_token: str,
+    local_extract_dir: str = "/content/dataset",
+) -> tuple:
+    """
+    Downloads the KionTTS dataset from HuggingFace (nate0001/KionTTS) directly
+    to the fast local Colab SSD — no Google Drive auth required.
 
-    if "google.colab" in sys.modules or os.path.exists("/content"):
-        print("[*] Mounting Google Drive...")
-        from google.colab import drive
-        drive.mount(drive_mount_point, force_remount=False)
-        return drive_mount_point
+    Expected repo layout (any combination of):
+      *.wav / wavs/*.wav         -> extracted to local_extract_dir/wavs/
+      *.tar.gz / *.zip           -> extracted, wavs pulled out
+      train_manifest.json        -> copied as-is
+      val_manifest.json          -> copied as-is
+      metadata.csv / metadata.json -> used to build manifests if needed
+    """
+    from huggingface_hub import HfApi, hf_hub_download, snapshot_download
 
-    print("[-] Not running in Google Colab; skipping drive mount.")
-    return None
+    print("=" * 70)
+    print("STEP 2: Downloading Dataset from HuggingFace")
+    print(f"  Repo   : {hf_dataset_repo}")
+    print(f"  Dest   : {local_extract_dir}")
+    print("=" * 70)
+    _tee_log(f"[*] Downloading dataset from HF: {hf_dataset_repo}")
+
+    os.makedirs(local_extract_dir, exist_ok=True)
+    wavs_dir = os.path.join(local_extract_dir, "wavs")
+    os.makedirs(wavs_dir, exist_ok=True)
+
+    # --- Download entire dataset repo snapshot ---
+    snap_dir = snapshot_download(
+        repo_id=hf_dataset_repo,
+        repo_type="dataset",
+        token=hf_token,
+        local_dir=os.path.join(local_extract_dir, "_hf_snap"),
+        ignore_patterns=["*.git*", ".gitattributes"],
+    )
+    print(f"[✓] Snapshot downloaded to: {snap_dir}")
+    _tee_log(f"[✓] HF snapshot at {snap_dir}")
+
+    # --- Collect all files from snapshot ---
+    all_files = glob.glob(os.path.join(snap_dir, "**", "*"), recursive=True)
+    wav_files  = [f for f in all_files if f.endswith(".wav")]
+    archives   = [f for f in all_files if f.endswith((".tar", ".tar.gz", ".tgz", ".zip"))]
+    manifests  = [f for f in all_files if os.path.basename(f) in
+                  ("train_manifest.json", "val_manifest.json",
+                   "metadata.json", "metadata.csv")]
+
+    # --- Copy flat wavs ---
+    for wf in wav_files:
+        shutil.copy(wf, os.path.join(wavs_dir, os.path.basename(wf)))
+    print(f"[*] Copied {len(wav_files)} loose wav files.")
+
+    # --- Extract archives ---
+    found_manifest_files = []
+    for arch in sorted(archives):
+        print(f"  -> Extracting: {os.path.basename(arch)}")
+        _tee_log(f"  -> Extracting: {os.path.basename(arch)}")
+        if arch.endswith((".tar", ".tar.gz", ".tgz")):
+            with tarfile.open(arch, "r:*") as tar:
+                for member in tar.getmembers():
+                    if member.name.endswith(".wav"):
+                        f = tar.extractfile(member)
+                        if f:
+                            with open(os.path.join(wavs_dir, os.path.basename(member.name)), "wb") as out:
+                                out.write(f.read())
+                    elif member.name.endswith(".json"):
+                        tar.extract(member, path=local_extract_dir)
+                        found_manifest_files.append(
+                            os.path.join(local_extract_dir, os.path.basename(member.name)))
+        elif arch.endswith(".zip"):
+            with zipfile.ZipFile(arch, "r") as zf:
+                for name in zf.namelist():
+                    if name.endswith(".wav"):
+                        with zf.open(name) as f:
+                            with open(os.path.join(wavs_dir, os.path.basename(name)), "wb") as out:
+                                out.write(f.read())
+                    elif name.endswith(".json"):
+                        zf.extract(name, path=local_extract_dir)
+                        found_manifest_files.append(os.path.join(local_extract_dir, name))
+
+    num_wavs = len(glob.glob(os.path.join(wavs_dir, "*.wav")))
+    print(f"[✓] Total audio files ready: {num_wavs}  in {wavs_dir}")
+    _tee_log(f"[✓] {num_wavs} wav files ready")
+
+    # --- Locate / build manifests ---
+    train_manifest = os.path.join(local_extract_dir, "train_manifest.json")
+    val_manifest   = os.path.join(local_extract_dir, "val_manifest.json")
+
+    # Copy from snapshot if present
+    for mf in manifests + found_manifest_files:
+        name = os.path.basename(mf)
+        if "train" in name and not os.path.exists(train_manifest):
+            shutil.copy(mf, train_manifest)
+        elif "val" in name and not os.path.exists(val_manifest):
+            shutil.copy(mf, val_manifest)
+
+    if not os.path.exists(train_manifest):
+        print("[*] No pre-built manifests found — generating from wavs...")
+        _tee_log("[*] Generating manifests from wavs")
+        all_wavs = sorted(glob.glob(os.path.join(wavs_dir, "*.wav")))
+        import random, json
+        random.seed(42)
+        random.shuffle(all_wavs)
+        split = max(1, int(len(all_wavs) * 0.05))
+        val_wavs   = all_wavs[:split]
+        train_wavs = all_wavs[split:]
+
+        def _make_entry(path):
+            return {"audio_filepath": path, "text": "", "duration": 0.0}
+
+        with open(train_manifest, "w") as f:
+            json.dump([_make_entry(p) for p in train_wavs], f, indent=2)
+        with open(val_manifest, "w") as f:
+            json.dump([_make_entry(p) for p in val_wavs], f, indent=2)
+        print(f"[✓] Generated manifests — train: {len(train_wavs)}, val: {len(val_wavs)}")
+        _tee_log(f"[✓] Manifests generated: train={len(train_wavs)} val={len(val_wavs)}")
+
+    return local_extract_dir, train_manifest, val_manifest
 
 
 def locate_drive_dataset(explicit_drive_path=None):
@@ -349,12 +453,12 @@ def main():
     parser.add_argument("--epochs", type=int, default=10, help="Number of Stage 1 epochs to run")
     parser.add_argument("--batch_size", type=int, default=4, help="Batch size")
     parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate")
-    parser.add_argument("--fresh", action="store_true", default=True, help="Train fresh from scratch (avoids resuming corrupted weights)")
-    parser.add_argument("--drive_dir", type=str, default=None, help="Explicit path to KionTTS_Dataset in Google Drive")
+    parser.add_argument("--fresh", action="store_true", default=True, help="Train fresh from scratch")
     parser.add_argument("--local_data_dir", type=str, default="/content/dataset", help="Fast local SSD directory for extracted dataset")
     parser.add_argument("--checkpoint_dir", type=str, default="checkpoints", help="Local directory to save checkpoints")
-    parser.add_argument("--hf_repo", type=str, default="nate0001/TTS_test", help="Hugging Face repo for checkpoint sync")
-    parser.add_argument("--hf_token", type=str, default=os.environ.get("HF_TOKEN", None), help="Hugging Face API token (defaults to HF_TOKEN env var)")
+    parser.add_argument("--hf_repo", type=str, default="nate0001/TTS_test", help="HuggingFace repo for checkpoint sync")
+    parser.add_argument("--hf_dataset", type=str, default="nate0001/KionTTS", help="HuggingFace dataset repo to download training data from")
+    parser.add_argument("--hf_token", type=str, default=os.environ.get("HF_TOKEN", None), help="HuggingFace API token (defaults to HF_TOKEN env var)")
     args = parser.parse_args()
 
     print("\n" + "=" * 75)
@@ -364,26 +468,10 @@ def main():
     # 1. Colab environment setup
     setup_colab_environment()
 
-    # 2. Mount Google Drive
-    mount_google_drive()
-
-    # 3. Discover Dataset in Google Drive
-    drive_dataset_dir = locate_drive_dataset(args.drive_dir)
-    if not drive_dataset_dir:
-        # Check if local sample dataset exists as fallback
-        sample_cand = os.path.join(REPO_ROOT, "DataSet", "data", "sample_kion.tar.gz")
-        if os.path.exists(sample_cand):
-            print(f"[!] Warning: Google Drive dataset not found. Using local sample dataset: {sample_cand}")
-            drive_dataset_dir = os.path.dirname(sample_cand)
-        else:
-            raise FileNotFoundError(
-                "Could not find KionTTS_Dataset in Google Drive! Please ensure Drive is mounted and "
-                "a folder named 'KionTTS_Dataset' exists in your My Drive."
-            )
-
-    # 4. Extract archives to local SSD
-    local_data_dir, train_manifest, val_manifest = extract_archives_to_local_ssd(
-        drive_dataset_dir=drive_dataset_dir,
+    # 2. Download dataset from HuggingFace (no Drive auth needed)
+    local_data_dir, train_manifest, val_manifest = download_dataset_from_hf(
+        hf_dataset_repo=args.hf_dataset,
+        hf_token=args.hf_token,
         local_extract_dir=args.local_data_dir,
     )
 
