@@ -88,6 +88,7 @@ def main():
     parser.add_argument("--num_workers", type=int, default=2, help="DataLoader worker processes per GPU")
     parser.add_argument("--hf_repo", type=str, default="nate0001/KionTTS", help="Hugging Face repo for checkpoint sync")
     parser.add_argument("--hf_token", type=str, default=None, help="Hugging Face API token (defaults to Kaggle Secrets or env)")
+    parser.add_argument("--fresh", action="store_true", help="Start fresh Stage 2 training without resuming from previous Stage 2 checkpoints")
     args = parser.parse_args()
 
     # Setup distributed multi-GPU (Kaggle dual T4 / torchrun / accelerate)
@@ -126,7 +127,7 @@ def main():
     )
 
     # Check for existing Stage 2 checkpoint to resume, or initialize from Stage 1
-    latest_stage2 = ckpt_manager.find_latest_checkpoint(stage="stage2")
+    latest_stage2 = None if args.fresh else ckpt_manager.find_latest_checkpoint(stage="stage2")
     start_epoch = 0
     start_step = 0
 

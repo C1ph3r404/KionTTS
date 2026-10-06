@@ -32,12 +32,17 @@ class KionTagStyleEncoder(nn.Module):
 
         # Multi-layer projection head mapping combined tag features to StyleTTS2 style space
         in_features = emb_dim + num_tags  # continuous embedding blend + raw intensity vector
+        final_proj = nn.Linear(128, style_dim)
+        # Initialize final projection with small weights and zero bias so output starts
+        # centered at zero with norm ~0.3-0.5, matching StyleTTS2 teacher style manifold
+        nn.init.normal_(final_proj.weight, mean=0.0, std=0.02)
+        nn.init.zeros_(final_proj.bias)
+
         self.proj = nn.Sequential(
             nn.Linear(in_features, 128),
             nn.LayerNorm(128),
             nn.GELU(),
-            nn.Linear(128, style_dim),
-            nn.LayerNorm(style_dim)
+            final_proj
         )
 
     def forward(self, tag_vectors):

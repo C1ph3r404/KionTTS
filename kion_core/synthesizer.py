@@ -229,9 +229,16 @@ class KionSynthesizer:
         en = d.transpose(-1, -2) @ pred_aln_trg.unsqueeze(0)
         F0_pred, N_pred = self.model["predictor"].F0Ntrain(en, s)
 
+        # Numerical bounds protection: prevent unclamped pitch/energy/AdaIN spikes
+        F0_pred = torch.nan_to_num(F0_pred, nan=0.0).clamp(0.0, 1000.0)
+        N_pred = torch.nan_to_num(N_pred, nan=0.0).clamp(-50.0, 50.0)
+        ref_clamped = torch.nan_to_num(ref, nan=0.0).clamp(-2.0, 2.0)
+
         # 4. Decoder Waveform Synthesis
         asr_aligned = t_en @ pred_aln_trg.unsqueeze(0)
-        out = self.model["decoder"](asr_aligned, F0_pred, N_pred, ref)
+        out = self.model["decoder"](asr_aligned, F0_pred, N_pred, ref_clamped)
 
         wave = out.squeeze().cpu().numpy()
+        wave = np.nan_to_num(wave, nan=0.0, posinf=1.0, neginf=-1.0)
+        wave = np.clip(wave, -1.0, 1.0)
         return wave

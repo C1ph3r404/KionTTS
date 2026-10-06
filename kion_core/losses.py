@@ -205,18 +205,21 @@ class KionStyleAlignmentLoss(nn.Module):
     and ground-truth reference audio style (s_audio).
     
     Protections:
-    - Combined Euclidean (MSE) and Cosine Similarity distance.
-    - Clamped against numerical overflow and NaNs.
-    - Regularization against vector explosion.
+    - Direct MSE coordinate loss: strictly enforces magnitude & manifold matching teacher (~0.54 norm).
+    - Angular cosine distance: aligns the directional orientation in 256-d space.
+    - Direct L1 loss: enforces fine-grained coordinate precision.
+    - Soft upper-bound norm penalty: prevents any vector magnitude explosion above teacher scale.
     """
-    def __init__(self, lambda_cos: float = 1.0, lambda_reg: float = 0.01):
+    def __init__(self, lambda_cos: float = 1.0, lambda_mse: float = 10.0, lambda_l1: float = 1.0, lambda_reg: float = 1.0):
         super().__init__()
         self.lambda_cos = lambda_cos
+        self.lambda_mse = lambda_mse
+        self.lambda_l1 = lambda_l1
         self.lambda_reg = lambda_reg
 
     def forward(self, s_tag: torch.Tensor, s_audio: torch.Tensor) -> torch.Tensor:
         s_tag_safe = torch.nan_to_num(s_tag, nan=0.0).clamp(-10.0, 10.0)
-        s_audio_safe = torch.nan_to_num(s_audio, nan=0.0).clamp(-10.0, 10.0)
+        s_audio_safe = torch.nan_to_num(s_audio.detach(), nan=0.0).clamp(-10.0, 10.0)
 
         # 1. Angular cosine distance between style vectors
         s_tag_norm = F.normalize(s_tag_safe, p=2, dim=-1, eps=1e-4)
@@ -224,13 +227,17 @@ class KionStyleAlignmentLoss(nn.Module):
         cos_sim = (s_tag_norm * s_audio_norm).sum(dim=-1).clamp(-1.0, 1.0)
         loss_cos = (1.0 - cos_sim).mean()
 
-        # 2. Normalized L1 feature matching (matching StyleTTS2 style reconstruction standard)
-        loss_l1 = F.l1_loss(s_tag_norm, s_audio_norm)
+        # 2. Direct unnormalized MSE coordinate loss (crucial for keeping norm matching teacher ~0.54)
+        loss_mse = F.mse_loss(s_tag_safe, s_audio_safe)
 
-        # 3. Direct L1 coordinate loss for fine-grained alignment
-        loss_direct = F.l1_loss(s_tag_safe, s_audio_safe.detach()) * 0.1
+        # 3. Direct unnormalized L1 coordinate loss
+        loss_l1 = F.l1_loss(s_tag_safe, s_audio_safe)
 
-        total = self.lambda_cos * loss_cos + loss_l1 + loss_direct
+        # 4. Norm boundary regularization: penalize vectors if norm exceeds 1.5 (teacher norm is ~0.54)
+        tag_norms = torch.norm(s_tag_safe, p=2, dim=-1)
+        norm_penalty = torch.mean(torch.relu(tag_norms - 1.5) ** 2)
+
+        total = self.lambda_cos * loss_cos + self.lambda_mse * loss_mse + self.lambda_l1 * loss_l1 + self.lambda_reg * norm_penalty
         if torch.isnan(total) or torch.isinf(total):
             return torch.tensor(0.0, device=s_tag.device, requires_grad=True)
         return total

@@ -164,7 +164,7 @@ class KionProductionTrainer:
 
         # Build base losses
         self.stft_loss = MultiResolutionSTFTLoss().to(self.device)
-        self.style_loss_fn = KionStyleAlignmentLoss(lambda_cos=1.0, lambda_reg=0.01).to(self.device)
+        self.style_loss_fn = KionStyleAlignmentLoss(lambda_cos=1.0, lambda_mse=10.0, lambda_l1=1.0, lambda_reg=1.0).to(self.device)
         self.gen_loss_fn = None
         self.disc_loss_fn = None
 
@@ -347,8 +347,90 @@ class KionProductionTrainer:
         if "mpd" in self.model and "msd" in self.model:
             disc_params = list(self.model["mpd"].parameters()) + list(self.model["msd"].parameters())
             self.opt_disc = torch.optim.AdamW(disc_params, lr=lr, betas=(0.0, 0.99), weight_decay=1e-4)
-        else:
-            self.opt_disc = None
+    def evaluate_style_alignment(self, loader, epoch: int, step: int):
+        """
+        Computes mathematical validation metrics comparing Student (tag_encoder)
+        against Teacher (style_encoder + predictor_encoder) on real dataset audio.
+        """
+        if not self.is_main_process or loader is None:
+            return
+
+        tag_was_training = self.tag_encoder.training
+        self.tag_encoder.eval()
+
+        eval_batches = 0
+        total_norm_t = 0.0
+        total_norm_s = 0.0
+        total_cos_full = 0.0
+        total_cos_acoustic = 0.0
+        total_cos_prosody = 0.0
+        total_mse = 0.0
+        max_coord_val = 0.0
+
+        with torch.no_grad():
+            for batch in loader:
+                waves, texts, input_lengths, mels, output_lengths, ref_mels, tag_vectors, paths = batch
+                ref_mels = ref_mels.to(self.device, non_blocking=True)
+                tag_vectors = tag_vectors.to(self.device, non_blocking=True)
+
+                # Teacher 256-d style from real audio
+                ref_t = self.model["style_encoder"](ref_mels.unsqueeze(1).float()).float()
+                p_t = self.model["predictor_encoder"](ref_mels.unsqueeze(1).float()).float()
+                s_teacher = torch.cat([ref_t, p_t], dim=-1)
+
+                # Student 256-d style from tags
+                s_student = self.tag_encoder(tag_vectors)
+
+                norm_t = torch.norm(s_teacher, p=2, dim=-1).mean().item()
+                norm_s = torch.norm(s_student, p=2, dim=-1).mean().item()
+                cos_full = F.cosine_similarity(s_student, s_teacher, dim=-1).mean().item()
+                cos_acoustic = F.cosine_similarity(s_student[:, :128], s_teacher[:, :128], dim=-1).mean().item()
+                cos_prosody = F.cosine_similarity(s_student[:, 128:], s_teacher[:, 128:], dim=-1).mean().item()
+                mse = F.mse_loss(s_student, s_teacher).item()
+
+                total_norm_t += norm_t
+                total_norm_s += norm_s
+                total_cos_full += cos_full
+                total_cos_acoustic += cos_acoustic
+                total_cos_prosody += cos_prosody
+                total_mse += mse
+                max_coord_val = max(max_coord_val, s_student.abs().max().item())
+
+                eval_batches += 1
+                if eval_batches >= 10:  # Evaluate across 10 batches for high statistical precision
+                    break
+
+        self.tag_encoder.train(tag_was_training)
+
+        if eval_batches > 0:
+            avg_norm_t = total_norm_t / eval_batches
+            avg_norm_s = total_norm_s / eval_batches
+            avg_cos_full = total_cos_full / eval_batches
+            avg_cos_acoustic = total_cos_acoustic / eval_batches
+            avg_cos_prosody = total_cos_prosody / eval_batches
+            avg_mse = total_mse / eval_batches
+
+            # Determine qualitative status
+            norm_status = "SAFE (Bounded ~0.5)" if avg_norm_s < 1.0 else "WARNING (Norm High)"
+            trend_status = "IMPROVING (Aligning to Teacher)" if avg_cos_full > 0.1 else "INITIALIZING"
+
+            print("\n" + "═" * 84)
+            print(f"  STAGE 1 EPOCH {epoch:02d} STYLE MANIFOLD EVALUATION (Student vs Official Teacher)")
+            print("─" * 84)
+            print(f"  Teacher Vector Norm : {avg_norm_t:.4f}         │ Student Vector Norm : {avg_norm_s:.4f} [{norm_status}]")
+            print(f"  Overall Cosine Sim  : {avg_cos_full:+.4f}         │ Coordinate MSE Loss : {avg_mse:.6f}")
+            print(f"  Acoustic Cosine Sim : {avg_cos_acoustic:+.4f}         │ Prosodic Cosine Sim : {avg_cos_prosody:+.4f}")
+            print(f"  Max Student Coord   : {max_coord_val:.4f}         │ Training Status     : {trend_status}")
+            print("═" * 84 + "\n")
+
+            if self.writer is not None:
+                self.writer.add_scalar("Evaluation/TeacherNorm", avg_norm_t, epoch)
+                self.writer.add_scalar("Evaluation/StudentNorm", avg_norm_s, epoch)
+                self.writer.add_scalar("Evaluation/CosineSim_Full", avg_cos_full, epoch)
+                self.writer.add_scalar("Evaluation/CosineSim_Acoustic", avg_cos_acoustic, epoch)
+                self.writer.add_scalar("Evaluation/CosineSim_Prosodic", avg_cos_prosody, epoch)
+                self.writer.add_scalar("Evaluation/Coordinate_MSE", avg_mse, epoch)
+                self.writer.add_scalar("Evaluation/MaxStudentCoord", max_coord_val, epoch)
 
     def generate_and_save_samples(
         self,
@@ -420,11 +502,16 @@ class KionProductionTrainer:
                 local_path = os.path.join(samples_dir, filename)
                 import soundfile as sf
                 sf.write(local_path, wave, 24000)
-                print(f"  [✓] Audio sample saved: {filename}")
+
+                clip_ratio = float(np.mean(np.abs(wave) >= 0.99))
+                mean_abs = float(np.mean(np.abs(wave)))
+                status = "CLEAN" if clip_ratio < 0.01 else ("DISTORTED" if clip_ratio < 0.15 else "CLIPPING")
+                print(f"  [✓] Audio sample saved: {filename} (Clip Ratio: {clip_ratio*100:4.1f}%, Mean Abs: {mean_abs:.4f}) [{status}]")
 
                 # TensorBoard audio logging
                 if self.writer is not None:
                     try:
+                        self.writer.add_scalar(f"{stage}/ClipRatio_{tag_label}", clip_ratio, epoch)
                         self.writer.add_audio(
                             tag=f"{stage}/Sample_{i+1}_{tag_label}",
                             snd_tensor=wave,
@@ -815,6 +902,7 @@ class KionProductionTrainer:
                         is_best=is_best,
                         upload_hf=True,
                     )
+                    self.evaluate_style_alignment(val_loader or train_loader, epoch=epoch + 1, step=global_step)
                     self.generate_and_save_samples(stage="stage1", epoch=epoch + 1, step=global_step)
 
                 if self.is_distributed and torch.distributed.is_initialized():
@@ -1035,7 +1123,8 @@ class KionProductionTrainer:
                 en_sub = torch.cat(en_slices, dim=0)
                 p_sub = torch.cat(p_slices, dim=0)
                 gt_sub = torch.cat(mel_slices, dim=0)
-                ref_sub = s_tag[:, :128].detach()
+                # Ground decoder to real acoustic style (prevents Snake activation instability and flatline silence)
+                ref_sub = s_acoustic_gt.detach()
 
                 with torch.no_grad():
                     F0_real = extract_f0_safe(self.model["pitch_extractor"], gt_sub.unsqueeze(1))
