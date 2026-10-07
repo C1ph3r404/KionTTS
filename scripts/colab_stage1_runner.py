@@ -141,7 +141,7 @@ def setup_colab_environment():
     pkgs = [
         "soundfile", "librosa", "phonemizer", "munch", "pyyaml",
         "transformers", "accelerate", "huggingface_hub", "tensorboard",
-        "einops", "einops-exts", "pyarrow", "monotonic-align",
+        "einops", "einops-exts", "pyarrow",
     ]
     run_command(f"pip install -q {' '.join(pkgs)}", "Installing required Python packages")
     # monotonic_align needs compilation
