@@ -59,8 +59,14 @@ def evaluate_checkpoint(
     plbert = load_plbert(bert_dir)
     teacher_model = build_model(args, text_aligner, pitch_extractor, plbert)
 
+    if not os.path.isabs(pretrained_ckpt):
+        pretrained_ckpt = os.path.join(REPO_ROOT, pretrained_ckpt)
+
     if os.path.exists(pretrained_ckpt):
         teacher_model, _, _, _ = load_checkpoint(teacher_model, None, pretrained_ckpt, load_only_params=True)
+        print(f"[✓] Loaded pretrained teacher backbone from: {pretrained_ckpt}")
+    else:
+        print(f"[!] Warning: pretrained_ckpt not found at: {pretrained_ckpt}")
 
     style_encoder = teacher_model["style_encoder"].to(device).eval()
     predictor_encoder = teacher_model.get("predictor_encoder", style_encoder).to(device).eval()
@@ -68,14 +74,17 @@ def evaluate_checkpoint(
     # 3. Build Student model (tag_encoder)
     tag_encoder = KionTagStyleEncoder().to(device).eval()
     ckpt_data = torch.load(checkpoint_path, map_location=device)
-    if "tag_encoder" in ckpt_data:
+    if "net" in ckpt_data and "tag_encoder" in ckpt_data["net"]:
+        tag_encoder.load_state_dict(ckpt_data["net"]["tag_encoder"])
+        print("[✓] Loaded trained tag_encoder from ckpt['net']['tag_encoder']")
+    elif "tag_encoder" in ckpt_data:
         tag_encoder.load_state_dict(ckpt_data["tag_encoder"])
+        print("[✓] Loaded trained tag_encoder from ckpt['tag_encoder']")
     elif "model_state_dict" in ckpt_data:
         tag_encoder.load_state_dict(ckpt_data["model_state_dict"])
     elif "state_dict" in ckpt_data:
         tag_encoder.load_state_dict(ckpt_data["state_dict"])
     else:
-        # Check if direct state dict
         try:
             tag_encoder.load_state_dict(ckpt_data)
         except Exception:
