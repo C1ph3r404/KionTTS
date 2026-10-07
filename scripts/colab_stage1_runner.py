@@ -137,12 +137,20 @@ def setup_colab_environment():
     # 1. System packages (espeak-ng is mandatory for IPA phonemization)
     run_command("apt-get update -qq && apt-get install -y -qq espeak-ng libsndfile1 git git-lfs", "Installing system libraries (espeak-ng, libsndfile1)")
 
-    # 2. Python packages
+    # 2. Python packages (includes StyleTTS2 diffusion deps)
     pkgs = [
         "soundfile", "librosa", "phonemizer", "munch", "pyyaml",
-        "transformers", "accelerate", "huggingface_hub", "tensorboard"
+        "transformers", "accelerate", "huggingface_hub", "tensorboard",
+        "einops", "einops-exts", "pyarrow", "monotonic-align",
     ]
     run_command(f"pip install -q {' '.join(pkgs)}", "Installing required Python packages")
+    # monotonic_align needs compilation
+    run_command(
+        f"cd {_COLAB_REPO_DIR}/StyleTTS2 && pip install -q -e . 2>/dev/null || "
+        f"python3 -c \"import monotonic_align\" 2>/dev/null || true",
+        "Building monotonic_align (StyleTTS2)",
+        check=False,
+    )
 
 
 def download_dataset_from_hf(
@@ -171,6 +179,19 @@ def download_dataset_from_hf(
     print(f"  Dest   : {local_extract_dir}")
     print("=" * 70)
     _tee_log(f"[*] Downloading dataset from HF: {hf_dataset_repo}")
+
+    train_manifest = os.path.join(local_extract_dir, "train_manifest.json")
+    val_manifest = os.path.join(local_extract_dir, "val_manifest.json")
+    if (
+        os.path.exists(train_manifest)
+        and os.path.exists(val_manifest)
+        and os.path.getsize(train_manifest) > 1000
+    ):
+        print(f"[✓] Existing decoded dataset found at {local_extract_dir}.")
+        print(f"    Train manifest: {train_manifest}")
+        print(f"    Val manifest  : {val_manifest}")
+        _tee_log(f"[✓] Reusing existing dataset manifests at {local_extract_dir}")
+        return local_extract_dir, train_manifest, val_manifest
 
     os.makedirs(local_extract_dir, exist_ok=True)
     wavs_dir = os.path.join(local_extract_dir, "wavs")
@@ -394,7 +415,28 @@ def extract_archives_to_local_ssd(drive_dataset_dir, local_extract_dir="/content
 
 
 def ensure_pretrained_backbone():
-    """Ensures StyleTTS2 LibriTTS checkpoint (epochs_2nd_00020.pth) is downloaded."""
+    """Ensures StyleTTS2 LibriTTS checkpoint and auxiliary models (ASR, JDC, PLBERT) are downloaded."""
+    import urllib.request
+
+    base_dir = os.path.join(REPO_ROOT, "StyleTTS2")
+    asr_dir = os.path.join(base_dir, "Utils", "ASR")
+    jdc_dir = os.path.join(base_dir, "Utils", "JDC")
+    plb_dir = os.path.join(base_dir, "Utils", "PLBERT")
+    os.makedirs(asr_dir, exist_ok=True)
+    os.makedirs(jdc_dir, exist_ok=True)
+    os.makedirs(plb_dir, exist_ok=True)
+
+    aux_downloads = [
+        ("ASR epoch_00080.pth", "https://github.com/yl4579/StyleTTS2/raw/main/Utils/ASR/epoch_00080.pth", os.path.join(asr_dir, "epoch_00080.pth")),
+        ("JDC bst.t7", "https://github.com/yl4579/StyleTTS2/raw/main/Utils/JDC/bst.t7", os.path.join(jdc_dir, "bst.t7")),
+        ("PLBERT step_1000000.t7", "https://github.com/yl4579/StyleTTS2/raw/main/Utils/PLBERT/step_1000000.t7", os.path.join(plb_dir, "step_1000000.t7")),
+    ]
+    for name, url, dest in aux_downloads:
+        if not os.path.exists(dest) or os.path.getsize(dest) < 10000:
+            print(f"[*] Downloading {name}...")
+            urllib.request.urlretrieve(url, dest)
+            print(f"[✓] Downloaded {name}")
+
     target_path = os.path.join(REPO_ROOT, "Models", "LibriTTS", "epochs_2nd_00020.pth")
     if os.path.exists(target_path) and os.path.getsize(target_path) > 1024 * 1024:
         print(f"[✓] Pretrained StyleTTS2 backbone found: {target_path}")
@@ -523,7 +565,7 @@ def main():
     #   colab exec -s <session> --timeout 30 -f /dev/stdin <<'EOF'
     #   import subprocess; subprocess.run('tail -n 200 /content/training.log', shell=True)
     #   EOF
-    train_cmd = f"{{ {cmd}; }} 2>&1 | tee -a {TRAIN_LOG}"
+    train_cmd = f"bash -o pipefail -c '{{ {cmd}; }} 2>&1 | tee -a {TRAIN_LOG}'"
     _tee_log(f"[*] Training log: {TRAIN_LOG}", LIVE_LOG)
     _tee_log(f"[*] Training log: {TRAIN_LOG}", TRAIN_LOG)
     print(f"[*] Live training log: {TRAIN_LOG}", flush=True)
@@ -536,6 +578,9 @@ def main():
         print("  - Audio synthesis produces clean speech with 0.0% square-wave clipping.")
         print(f"  - Checkpoints and clean audio samples synced to HF: https://huggingface.co/{args.hf_repo}")
         print("=" * 75 + "\n")
+    else:
+        print(f"\n[!] Stage 1 Training failed with exit code {exit_code}. Check {TRAIN_LOG} for full traceback.")
+        sys.exit(exit_code)
 
 
 if __name__ == "__main__":
