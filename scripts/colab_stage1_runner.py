@@ -151,20 +151,22 @@ def download_dataset_from_hf(
     local_extract_dir: str = "/content/dataset",
 ) -> tuple:
     """
-    Downloads the KionTTS dataset from HuggingFace (nate0001/KionTTS) directly
-    to the fast local Colab SSD — no Google Drive auth required.
+    Downloads nate0001/KionTTS from HuggingFace and extracts to local SSD.
 
-    Expected repo layout (any combination of):
-      *.wav / wavs/*.wav         -> extracted to local_extract_dir/wavs/
-      *.tar.gz / *.zip           -> extracted, wavs pulled out
-      train_manifest.json        -> copied as-is
-      val_manifest.json          -> copied as-is
-      metadata.csv / metadata.json -> used to build manifests if needed
+    Dataset schema (Parquet shards):
+      id      : str  - unique sample ID
+      tier    : str  - 'tier1' / 'tier2' / 'tier3'
+      text    : str  - tagged transcript e.g. '[authoritative=0.8] text...'
+      audio   : dict - {'bytes': <raw wav bytes>, 'path': 'wavs/<id>.wav'}
+      emotions: str  - JSON emotion dict
+      styles  : str  - JSON style/tag dict e.g. '{"authoritative": 0.8}'
     """
-    from huggingface_hub import HfApi, hf_hub_download, snapshot_download
+    import json as _json
+    import random as _random
+    from huggingface_hub import snapshot_download
 
     print("=" * 70)
-    print("STEP 2: Downloading Dataset from HuggingFace")
+    print("STEP 2: Downloading & Decoding Dataset from HuggingFace")
     print(f"  Repo   : {hf_dataset_repo}")
     print(f"  Dest   : {local_extract_dir}")
     print("=" * 70)
@@ -174,97 +176,96 @@ def download_dataset_from_hf(
     wavs_dir = os.path.join(local_extract_dir, "wavs")
     os.makedirs(wavs_dir, exist_ok=True)
 
-    # --- Download entire dataset repo snapshot ---
+    # Download all parquet shards via snapshot
     snap_dir = snapshot_download(
         repo_id=hf_dataset_repo,
         repo_type="dataset",
         token=hf_token,
         local_dir=os.path.join(local_extract_dir, "_hf_snap"),
-        ignore_patterns=["*.git*", ".gitattributes"],
+        ignore_patterns=["*.git*", ".gitattributes", "README.md"],
     )
     print(f"[✓] Snapshot downloaded to: {snap_dir}")
     _tee_log(f"[✓] HF snapshot at {snap_dir}")
 
-    # --- Collect all files from snapshot ---
-    all_files = glob.glob(os.path.join(snap_dir, "**", "*"), recursive=True)
-    wav_files  = [f for f in all_files if f.endswith(".wav")]
-    archives   = [f for f in all_files if f.endswith((".tar", ".tar.gz", ".tgz", ".zip"))]
-    manifests  = [f for f in all_files if os.path.basename(f) in
-                  ("train_manifest.json", "val_manifest.json",
-                   "metadata.json", "metadata.csv")]
+    # Find and decode all parquet shards
+    parquet_files = sorted(glob.glob(os.path.join(snap_dir, "**", "*.parquet"), recursive=True))
+    print(f"[*] Found {len(parquet_files)} parquet shards to decode.")
+    _tee_log(f"[*] Decoding {len(parquet_files)} parquet shards")
 
-    # --- Copy flat wavs ---
-    for wf in wav_files:
-        shutil.copy(wf, os.path.join(wavs_dir, os.path.basename(wf)))
-    print(f"[*] Copied {len(wav_files)} loose wav files.")
+    if not parquet_files:
+        raise FileNotFoundError(f"No .parquet files in snapshot at {snap_dir}")
 
-    # --- Extract archives ---
-    found_manifest_files = []
-    for arch in sorted(archives):
-        print(f"  -> Extracting: {os.path.basename(arch)}")
-        _tee_log(f"  -> Extracting: {os.path.basename(arch)}")
-        if arch.endswith((".tar", ".tar.gz", ".tgz")):
-            with tarfile.open(arch, "r:*") as tar:
-                for member in tar.getmembers():
-                    if member.name.endswith(".wav"):
-                        f = tar.extractfile(member)
-                        if f:
-                            with open(os.path.join(wavs_dir, os.path.basename(member.name)), "wb") as out:
-                                out.write(f.read())
-                    elif member.name.endswith(".json"):
-                        tar.extract(member, path=local_extract_dir)
-                        found_manifest_files.append(
-                            os.path.join(local_extract_dir, os.path.basename(member.name)))
-        elif arch.endswith(".zip"):
-            with zipfile.ZipFile(arch, "r") as zf:
-                for name in zf.namelist():
-                    if name.endswith(".wav"):
-                        with zf.open(name) as f:
-                            with open(os.path.join(wavs_dir, os.path.basename(name)), "wb") as out:
-                                out.write(f.read())
-                    elif name.endswith(".json"):
-                        zf.extract(name, path=local_extract_dir)
-                        found_manifest_files.append(os.path.join(local_extract_dir, name))
+    try:
+        import pyarrow.parquet as pq
+    except ImportError:
+        import subprocess as _sp
+        _sp.run("pip install -q pyarrow", shell=True)
+        import pyarrow.parquet as pq
+
+    all_entries = []
+    for i, pf_path in enumerate(parquet_files):
+        shard = os.path.relpath(pf_path, snap_dir)
+        print(f"  [{i+1}/{len(parquet_files)}] Decoding {shard} ...", flush=True)
+        _tee_log(f"  [{i+1}/{len(parquet_files)}] {shard}")
+
+        table = pq.read_table(pf_path)
+        rows = table.to_pydict()
+        n = len(rows.get("id", []))
+
+        for j in range(n):
+            sample_id  = rows["id"][j]
+            audio_col  = rows["audio"][j]
+            text       = (rows.get("text") or [""] * n)[j] or ""
+            styles_raw = (rows.get("styles") or ["{}"] * n)[j] or "{}"
+
+            wav_bytes = audio_col.get("bytes") if isinstance(audio_col, dict) else audio_col
+            if not wav_bytes:
+                continue
+
+            wav_path = os.path.join(wavs_dir, f"{sample_id}.wav")
+            with open(wav_path, "wb") as fout:
+                fout.write(wav_bytes)
+
+            try:
+                style_dict = _json.loads(styles_raw) if isinstance(styles_raw, str) else styles_raw
+            except Exception:
+                style_dict = {}
+
+            all_entries.append({
+                "audio_filepath": wav_path,
+                "text": text,
+                "styles": style_dict,
+                "duration": 0.0,
+            })
+
+        print(f"     -> {n} samples | running total: {len(all_entries)}", flush=True)
 
     num_wavs = len(glob.glob(os.path.join(wavs_dir, "*.wav")))
-    print(f"[✓] Total audio files ready: {num_wavs}  in {wavs_dir}")
-    _tee_log(f"[✓] {num_wavs} wav files ready")
+    print(f"[✓] Total audio files written: {num_wavs} -> {wavs_dir}")
+    _tee_log(f"[✓] {num_wavs} wav files ready, {len(all_entries)} manifest entries")
 
-    # --- Locate / build manifests ---
+    if num_wavs == 0:
+        raise RuntimeError("Dataset decoded 0 audio samples — check HF repo schema!")
+
+    # Build train/val manifests
     train_manifest = os.path.join(local_extract_dir, "train_manifest.json")
     val_manifest   = os.path.join(local_extract_dir, "val_manifest.json")
 
-    # Copy from snapshot if present
-    for mf in manifests + found_manifest_files:
-        name = os.path.basename(mf)
-        if "train" in name and not os.path.exists(train_manifest):
-            shutil.copy(mf, train_manifest)
-        elif "val" in name and not os.path.exists(val_manifest):
-            shutil.copy(mf, val_manifest)
+    _random.seed(42)
+    _random.shuffle(all_entries)
+    split = max(1, int(len(all_entries) * 0.05))
+    val_entries   = all_entries[:split]
+    train_entries = all_entries[split:]
 
-    if not os.path.exists(train_manifest):
-        print("[*] No pre-built manifests found — generating from wavs...")
-        _tee_log("[*] Generating manifests from wavs")
-        all_wavs = sorted(glob.glob(os.path.join(wavs_dir, "*.wav")))
-        import random, json
-        random.seed(42)
-        random.shuffle(all_wavs)
-        split = max(1, int(len(all_wavs) * 0.05))
-        val_wavs   = all_wavs[:split]
-        train_wavs = all_wavs[split:]
+    with open(train_manifest, "w") as f:
+        _json.dump(train_entries, f, indent=2)
+    with open(val_manifest, "w") as f:
+        _json.dump(val_entries, f, indent=2)
 
-        def _make_entry(path):
-            return {"audio_filepath": path, "text": "", "duration": 0.0}
-
-        with open(train_manifest, "w") as f:
-            json.dump([_make_entry(p) for p in train_wavs], f, indent=2)
-        with open(val_manifest, "w") as f:
-            json.dump([_make_entry(p) for p in val_wavs], f, indent=2)
-        print(f"[✓] Generated manifests — train: {len(train_wavs)}, val: {len(val_wavs)}")
-        _tee_log(f"[✓] Manifests generated: train={len(train_wavs)} val={len(val_wavs)}")
+    print(f"[✓] Manifests written — train: {len(train_entries)}, val: {len(val_entries)}")
+    _tee_log(f"[✓] Manifests: train={len(train_entries)} val={len(val_entries)}")
 
     return local_extract_dir, train_manifest, val_manifest
-
 
 def locate_drive_dataset(explicit_drive_path=None):
     """
