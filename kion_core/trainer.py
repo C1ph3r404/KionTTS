@@ -843,7 +843,8 @@ class KionProductionTrainer:
                         f"F0Loss: {loss_f0.item():.4f} | "
                         f"NormLoss: {loss_norm.item():.4f} | "
                         f"DurLoss: {loss_dur.item():.4f} | "
-                        f"{it_per_sec:.2f} it/s (ETA: {int(eta_sec)}s)"
+                        f"{it_per_sec:.2f} it/s (ETA: {int(eta_sec)}s)",
+                        flush=True,
                     )
 
             # Synchronize metrics across all distributed ranks to guarantee identical loss and checkpoint decisions

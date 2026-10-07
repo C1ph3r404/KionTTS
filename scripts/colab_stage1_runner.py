@@ -547,7 +547,7 @@ def main():
     print("=" * 70 + "\n")
 
     cmd = (
-        f"{sys.executable} scripts/train_stage1.py "
+        f"{sys.executable} -u scripts/train_stage1.py "
         f"--config StyleTTS2/Configs/config_ft.yml "
         f"--pretrained_ckpt {pretrained_ckpt} "
         f"--manifest {train_manifest} "
