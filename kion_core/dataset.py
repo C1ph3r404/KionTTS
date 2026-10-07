@@ -76,16 +76,20 @@ class KionManifestDataset(Dataset):
 
     def __getitem__(self, idx):
         item = self.samples[idx]
-        wav_full_path = osp.join(self.root_dir, item["wav_path"])
-        if not osp.exists(wav_full_path):
-            for candidate in [
-                osp.join(self.root_dir, "sample_kion", item["wav_path"]),
-                osp.join(self.root_dir, "wavs", osp.basename(item["wav_path"])),
-                osp.join(self.root_dir, osp.basename(item["wav_path"]))
-            ]:
-                if osp.exists(candidate):
-                    wav_full_path = candidate
-                    break
+        raw_path = item.get("wav_path") or item.get("audio_filepath", "")
+        if osp.isabs(raw_path) and osp.exists(raw_path):
+            wav_full_path = raw_path
+        else:
+            wav_full_path = osp.join(self.root_dir, raw_path)
+            if not osp.exists(wav_full_path):
+                for candidate in [
+                    osp.join(self.root_dir, "wavs", osp.basename(raw_path)),
+                    osp.join(self.root_dir, "sample_kion", raw_path),
+                    osp.join(self.root_dir, osp.basename(raw_path)),
+                ]:
+                    if osp.exists(candidate):
+                        wav_full_path = candidate
+                        break
 
         # Load audio
         wave, sr = sf.read(wav_full_path)
@@ -105,12 +109,13 @@ class KionManifestDataset(Dataset):
         acoustic_feature = mel_tensor[:, :(length_feature - length_feature % 2)]
 
         # Phonemize or use pre-phonemized field
+        raw_text = item.get("clean_text") or item.get("text", "")
         if "phonemes" in item:
             phoneme_text = item["phonemes"]
         elif self.phonemizer_fn is not None:
-            phoneme_text = self.phonemizer_fn(item["clean_text"])
+            phoneme_text = self.phonemizer_fn(raw_text)
         else:
-            phoneme_text = item["clean_text"]
+            phoneme_text = raw_text
 
         text_tensor = self._clean_phonemes_to_ids(phoneme_text)
         tag_vector = self._get_tag_vector(item)

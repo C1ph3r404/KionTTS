@@ -254,6 +254,8 @@ def download_dataset_from_hf(
 
             all_entries.append({
                 "audio_filepath": wav_path,
+                "wav_path": f"wavs/{sample_id}.wav",
+                "clean_text": text,
                 "text": text,
                 "styles": style_dict,
                 "duration": 0.0,
