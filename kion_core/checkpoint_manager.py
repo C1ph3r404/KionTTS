@@ -253,7 +253,8 @@ class KionCheckpointManager:
             if k in net:
                 target_mod = mod.module if hasattr(mod, "module") else mod
                 try:
-                    target_mod.load_state_dict(net[k], strict=False)
+                    clean_dict = {key.replace("module.", ""): v for key, v in net[k].items()} if isinstance(net[k], dict) else net[k]
+                    target_mod.load_state_dict(clean_dict, strict=False)
                     print(f"  [✓] Loaded weights for: {k}")
                 except Exception as e:
                     print(f"  [!] Warning loading {k}: {e}")

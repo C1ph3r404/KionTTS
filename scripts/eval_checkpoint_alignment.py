@@ -40,7 +40,20 @@ def evaluate_checkpoint(
     device: str = "cuda" if torch.cuda.is_available() else "cpu",
     max_batches: int = 15,
 ):
-    # 1. Locate checkpoint
+    # 1. Discover manifests & paths
+    if not os.path.exists(val_manifest):
+        for cand_manifest, cand_root in [
+            (os.path.join(REPO_ROOT, "DataSet/val_manifest.json"), os.path.join(REPO_ROOT, "DataSet")),
+            (os.path.join(REPO_ROOT, "dataset/val_manifest.json"), os.path.join(REPO_ROOT, "dataset")),
+            ("/kaggle/working/KionTTS/DataSet/val_manifest.json", "/kaggle/working/KionTTS/DataSet"),
+            ("/content/dataset/val_manifest.json", "/content/dataset"),
+        ]:
+            if os.path.exists(cand_manifest):
+                val_manifest = cand_manifest
+                data_root = cand_root
+                break
+
+    # Locate checkpoint
     if not checkpoint_path:
         check_dir = os.path.join(REPO_ROOT, checkpoint_dir) if not os.path.isabs(checkpoint_dir) else checkpoint_dir
         ckpts = sorted(glob.glob(os.path.join(check_dir, "*.pth")) + glob.glob(os.path.join(check_dir, "*.pt")))
