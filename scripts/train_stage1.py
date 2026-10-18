@@ -205,10 +205,13 @@ def main():
             save_step_freq=args.save_step_freq,
         )
     finally:
+        if is_distributed and torch.distributed.is_initialized():
+            try:
+                torch.distributed.destroy_process_group()
+            except Exception:
+                pass
         if is_main_process and hasattr(ckpt_manager, "wait_for_uploads"):
             ckpt_manager.wait_for_uploads()
-        if is_distributed and torch.distributed.is_initialized():
-            torch.distributed.destroy_process_group()
 
 
 if __name__ == "__main__":

@@ -281,6 +281,7 @@ class KionProductionTrainer:
                             device_ids=[dev_idx],
                             output_device=dev_idx,
                             find_unused_parameters=True,
+                            broadcast_buffers=False,
                         )
 
             if not isinstance(self.tag_encoder, torch.nn.parallel.DistributedDataParallel):
@@ -289,6 +290,7 @@ class KionProductionTrainer:
                     device_ids=[dev_idx],
                     output_device=dev_idx,
                     find_unused_parameters=True,
+                    broadcast_buffers=False,
                 )
 
             # Ensure predictor parameters are synchronized across ranks at stage start
@@ -378,8 +380,9 @@ class KionProductionTrainer:
                 p_t = self.model["predictor_encoder"](ref_mels.unsqueeze(1).float()).float()
                 s_teacher = torch.cat([ref_t, p_t], dim=-1)
 
-                # Student 256-d style from tags
-                s_student = self.tag_encoder(tag_vectors)
+                # Student 256-d style from tags (use unwrapped module in eval to avoid DDP collective hooks)
+                eval_tag_enc = self.tag_encoder.module if hasattr(self.tag_encoder, "module") else self.tag_encoder
+                s_student = eval_tag_enc(tag_vectors)
 
                 norm_t = torch.norm(s_teacher, p=2, dim=-1).mean().item()
                 norm_s = torch.norm(s_student, p=2, dim=-1).mean().item()
@@ -528,8 +531,12 @@ class KionProductionTrainer:
             except Exception as e:
                 print(f"  [!] Notice during sample synthesis '{tag_label}': {e}")
 
-        # Restore decoder device if it was offloaded to CPU
-        if decoder_device != self.device:
+        # Restore decoder device if it was offloaded to CPU (e.g. in Stage 1)
+        if stage == "stage1" and "decoder" in self.model and self.model["decoder"] is not None:
+            decoder_mod.to("cpu")
+            if self.device.type == "cuda":
+                torch.cuda.empty_cache()
+        elif decoder_device != self.device:
             decoder_mod.to(decoder_device)
 
         # Restore module training states
@@ -872,12 +879,24 @@ class KionProductionTrainer:
                     self.writer.add_scalar("Stage1/PredictorLoss", avg_pred, epoch + 1)
                     self.writer.add_scalar("Stage1/TotalLoss", epoch_loss, epoch + 1)
 
-            # Checkpoint saving & remote sync (evaluates identically across all ranks)
-            is_best = epoch_loss < best_loss
-            if is_best:
-                best_loss = epoch_loss
+            # Checkpoint saving & remote sync: synchronized explicitly across all ranks
+            if self.is_main_process:
+                is_best = epoch_loss < best_loss
+                if is_best:
+                    best_loss = epoch_loss
+                should_save = ((epoch + 1) % save_freq == 0) or is_best or ((epoch + 1) == epochs)
+            else:
+                is_best = False
+                should_save = False
 
-            should_save = ((epoch + 1) % save_freq == 0) or is_best or ((epoch + 1) == epochs)
+            if self.is_distributed and torch.distributed.is_initialized():
+                sync_flags = torch.tensor([1 if should_save else 0, 1 if is_best else 0], dtype=torch.int32, device=self.device)
+                torch.distributed.broadcast(sync_flags, src=0)
+                should_save = bool(sync_flags[0].item() == 1)
+                is_best = bool(sync_flags[1].item() == 1)
+                if is_best:
+                    best_loss = epoch_loss
+
             if should_save:
                 if self.is_main_process:
                     save_models = {
@@ -903,7 +922,8 @@ class KionProductionTrainer:
                         is_best=is_best,
                         upload_hf=True,
                     )
-                    self.evaluate_style_alignment(val_loader or train_loader, epoch=epoch + 1, step=global_step)
+                    if val_loader is not None:
+                        self.evaluate_style_alignment(val_loader, epoch=epoch + 1, step=global_step)
                     self.generate_and_save_samples(stage="stage1", epoch=epoch + 1, step=global_step)
 
                 if self.is_distributed and torch.distributed.is_initialized():
@@ -1336,12 +1356,24 @@ class KionProductionTrainer:
                     self.writer.add_scalar("Stage2/GenLoss", avg_gen, epoch + 1)
                     self.writer.add_scalar("Stage2/DiscLoss", avg_disc, epoch + 1)
 
-            # Checkpoint saving & remote sync (evaluates identically across all ranks)
-            is_best = epoch_loss < best_loss
-            if is_best:
-                best_loss = epoch_loss
+            # Checkpoint saving & remote sync: synchronized explicitly across all ranks
+            if self.is_main_process:
+                is_best = epoch_loss < best_loss
+                if is_best:
+                    best_loss = epoch_loss
+                should_save = ((epoch + 1) % save_freq == 0) or is_best or ((epoch + 1) == epochs)
+            else:
+                is_best = False
+                should_save = False
 
-            should_save = ((epoch + 1) % save_freq == 0) or is_best or ((epoch + 1) == epochs)
+            if self.is_distributed and torch.distributed.is_initialized():
+                sync_flags = torch.tensor([1 if should_save else 0, 1 if is_best else 0], dtype=torch.int32, device=self.device)
+                torch.distributed.broadcast(sync_flags, src=0)
+                should_save = bool(sync_flags[0].item() == 1)
+                is_best = bool(sync_flags[1].item() == 1)
+                if is_best:
+                    best_loss = epoch_loss
+
             if should_save:
                 if self.is_main_process:
                     save_models = {
