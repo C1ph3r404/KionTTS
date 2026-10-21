@@ -88,6 +88,8 @@ def main():
     parser.add_argument("--num_workers", type=int, default=2, help="DataLoader worker processes per GPU")
     parser.add_argument("--hf_repo", type=str, default="nate0001/KionTTS", help="Hugging Face repo for checkpoint sync")
     parser.add_argument("--hf_token", type=str, default=None, help="Hugging Face API token (defaults to Kaggle Secrets or env)")
+    parser.add_argument("--acoustic_scale", type=float, default=1.0, help="Optional multiplier to scale acoustic style vector (use 2.5 if resuming from unfixed Stage 1 checkpoint)")
+    parser.add_argument("--prosodic_scale", type=float, default=1.0, help="Optional multiplier to scale prosodic style vector (use 3.1 if resuming from unfixed Stage 1 checkpoint)")
     parser.add_argument("--fresh", action="store_true", help="Start fresh Stage 2 training without resuming from previous Stage 2 checkpoints")
     args = parser.parse_args()
 
@@ -116,8 +118,16 @@ def main():
     # 1. Load StyleTTS2 Backbone
     model, config = load_styletts2_backbone(args.config, args.pretrained_ckpt, device=device)
 
-    # 2. Initialize KionTagStyleEncoder
-    tag_encoder = KionTagStyleEncoder(num_tags=24, emb_dim=64, style_dim=256)
+    # 2. Initialize KionTagStyleEncoder (with scale multipliers to bridge stage 1 under-scaling)
+    tag_encoder = KionTagStyleEncoder(
+        num_tags=24,
+        emb_dim=64,
+        style_dim=256,
+        acoustic_scale=args.acoustic_scale,
+        prosodic_scale=args.prosodic_scale,
+    )
+    if is_main_process and (args.acoustic_scale != 1.0 or args.prosodic_scale != 1.0):
+        print(f"[*] Applied Tag Style Multipliers: Acoustic={args.acoustic_scale:.2f}x | Prosodic={args.prosodic_scale:.2f}x (Matching Teacher Norms ~2.66 / ~3.80)")
 
     # 3. Setup Checkpoint Manager
     ckpt_manager = KionCheckpointManager(

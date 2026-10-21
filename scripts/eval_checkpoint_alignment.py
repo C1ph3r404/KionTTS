@@ -39,6 +39,8 @@ def evaluate_checkpoint(
     pretrained_ckpt: str = "Models/LibriTTS/epochs_2nd_00020.pth",
     device: str = "cuda" if torch.cuda.is_available() else "cpu",
     max_batches: int = 15,
+    acoustic_scale: float = 1.0,
+    prosodic_scale: float = 1.0,
 ):
     # 1. Discover manifests & paths
     if not os.path.exists(val_manifest):
@@ -96,7 +98,7 @@ def evaluate_checkpoint(
     # 3. Load Checkpoint and Student model (tag_encoder)
     ckpt_data = torch.load(checkpoint_path, map_location=device, weights_only=False)
 
-    tag_encoder = KionTagStyleEncoder().to(device).eval()
+    tag_encoder = KionTagStyleEncoder(acoustic_scale=acoustic_scale, prosodic_scale=prosodic_scale).to(device).eval()
     if "net" in ckpt_data and "tag_encoder" in ckpt_data["net"]:
         clean_tag = {k.replace("module.", ""): v for k, v in ckpt_data["net"]["tag_encoder"].items()}
         tag_encoder.load_state_dict(clean_tag)
@@ -126,17 +128,21 @@ def evaluate_checkpoint(
         num_workers=0,
     )
 
-    # 5. Evaluate
+    # Metrics
     eval_batches = 0
     total_norm_libri = 0.0
-    total_norm_internal = 0.0
     total_norm_student = 0.0
+    total_norm_s_ac = 0.0
+    total_norm_s_pr = 0.0
+    total_norm_t_ac = 0.0
+    total_norm_t_pr = 0.0
 
     total_cos_libri = 0.0
     total_cos_acoustic_libri = 0.0
     total_cos_prosody_libri = 0.0
     total_mse_libri = 0.0
 
+    total_norm_internal = 0.0
     total_cos_internal = 0.0
     total_mse_internal = 0.0
 
@@ -156,9 +162,14 @@ def evaluate_checkpoint(
             p_t_libri = official_predictor_encoder(ref_mels.unsqueeze(1).float()).float()
             s_teacher_libri = torch.cat([ref_t_libri, p_t_libri], dim=-1)
 
-            # Metrics vs Official LibriTTS
+            # Norms breakdown
             norm_l = torch.norm(s_teacher_libri, p=2, dim=-1).mean().item()
             norm_s = torch.norm(s_student, p=2, dim=-1).mean().item()
+            norm_s_ac = torch.norm(s_student[:, :128], p=2, dim=-1).mean().item()
+            norm_s_pr = torch.norm(s_student[:, 128:], p=2, dim=-1).mean().item()
+            norm_t_ac = torch.norm(ref_t_libri, p=2, dim=-1).mean().item()
+            norm_t_pr = torch.norm(p_t_libri, p=2, dim=-1).mean().item()
+
             cos_l = F.cosine_similarity(s_student, s_teacher_libri, dim=-1).mean().item()
             cos_ac_l = F.cosine_similarity(s_student[:, :128], s_teacher_libri[:, :128], dim=-1).mean().item()
             cos_pr_l = F.cosine_similarity(s_student[:, 128:], s_teacher_libri[:, 128:], dim=-1).mean().item()
@@ -166,6 +177,11 @@ def evaluate_checkpoint(
 
             total_norm_libri += norm_l
             total_norm_student += norm_s
+            total_norm_s_ac += norm_s_ac
+            total_norm_s_pr += norm_s_pr
+            total_norm_t_ac += norm_t_ac
+            total_norm_t_pr += norm_t_pr
+
             total_cos_libri += cos_l
             total_cos_acoustic_libri += cos_ac_l
             total_cos_prosody_libri += cos_pr_l
@@ -174,7 +190,6 @@ def evaluate_checkpoint(
             # Metrics vs Internal Training Teacher (if available)
             if internal_style_encoder is not None:
                 ref_t_int = internal_style_encoder(ref_mels.unsqueeze(1).float()).float()
-                # in training, predictor_encoder was either internal_style_encoder or distinct
                 s_teacher_int = torch.cat([ref_t_int, ref_t_int], dim=-1)
                 norm_int = torch.norm(s_teacher_int, p=2, dim=-1).mean().item()
                 cos_int = F.cosine_similarity(s_student, s_teacher_int, dim=-1).mean().item()
@@ -193,26 +208,37 @@ def evaluate_checkpoint(
     if eval_batches > 0:
         avg_norm_l = total_norm_libri / eval_batches
         avg_norm_s = total_norm_student / eval_batches
+        avg_norm_s_ac = total_norm_s_ac / eval_batches
+        avg_norm_s_pr = total_norm_s_pr / eval_batches
+        avg_norm_t_ac = total_norm_t_ac / eval_batches
+        avg_norm_t_pr = total_norm_t_pr / eval_batches
+
         avg_cos_l = total_cos_libri / eval_batches
         avg_cos_ac_l = total_cos_acoustic_libri / eval_batches
         avg_cos_pr_l = total_cos_prosody_libri / eval_batches
         avg_mse_l = total_mse_libri / eval_batches
 
         step_label = os.path.basename(checkpoint_path)
-        norm_status = "STABLE" if 0.1 <= avg_norm_s <= 5.0 else "UNBOUNDED"
+        is_bridged = (tag_encoder.acoustic_scale != 1.0 or tag_encoder.prosodic_scale != 1.0)
 
         print("\n" + "═" * 84)
         print(f"  STAGE 1 [{step_label}] STYLE MANIFOLD EVALUATION REPORT")
         print("═" * 84)
-        print(f"  Student Vector L2 Norm  : {avg_norm_s:.4f}  [{norm_status}]")
+        print(f"  Student Vector L2 Norm  : {avg_norm_s:.4f}  (Acoustic={avg_norm_s_ac:.4f} | Prosodic={avg_norm_s_pr:.4f})")
         print(f"  Max Student Coordinate  : {max_coord_val:.4f}")
+        if is_bridged:
+            print(f"  Active Scale Multipliers: Acoustic={tag_encoder.acoustic_scale:.2f}x | Prosodic={tag_encoder.prosodic_scale:.2f}x")
         print("─" * 84)
         print("  COMPARISON A: STUDENT vs OFFICIAL PRETRAINED TEACHER (LibriTTS Backbone)")
-        print(f"    • Official Teacher Norm : {avg_norm_l:.4f}")
+        print(f"    • Official Teacher Norm : {avg_norm_l:.4f}  (Acoustic={avg_norm_t_ac:.4f} | Prosodic={avg_norm_t_pr:.4f})")
         print(f"    • Overall Cosine Sim    : {avg_cos_l:+.4f}")
         print(f"    • Acoustic Cosine Sim   : {avg_cos_ac_l:+.4f} (Acoustic 128D)")
         print(f"    • Prosodic Cosine Sim   : {avg_cos_pr_l:+.4f} (Prosodic 128D)")
         print(f"    • Manifold MSE Loss     : {avg_mse_l:.6f}")
+        if not is_bridged:
+            rec_ac = avg_norm_t_ac / max(1e-4, avg_norm_s_ac)
+            rec_pr = avg_norm_t_pr / max(1e-4, avg_norm_s_pr)
+            print(f"    • Recommended Bridge    : --acoustic_scale {rec_ac:.2f} --prosodic_scale {rec_pr:.2f}")
 
         if internal_style_encoder is not None:
             avg_norm_int = total_norm_internal / eval_batches
@@ -228,8 +254,15 @@ def evaluate_checkpoint(
 
 
 if __name__ == "__main__":
-    ckpt = None
-    args = [a for a in sys.argv[1:] if not a.startswith("-") and not a.endswith(".json")]
-    if args:
-        ckpt = args[0]
-    evaluate_checkpoint(checkpoint_path=ckpt)
+    import argparse
+    parser = argparse.ArgumentParser(description="Audit StyleTTS2 Student vs Teacher alignment.")
+    parser.add_argument("checkpoint", nargs="?", default=None, help="Path to checkpoint .pth")
+    parser.add_argument("--acoustic_scale", type=float, default=1.0, help="Acoustic scale multiplier")
+    parser.add_argument("--prosodic_scale", type=float, default=1.0, help="Prosodic scale multiplier")
+    cli_args = parser.parse_args()
+
+    evaluate_checkpoint(
+        checkpoint_path=cli_args.checkpoint,
+        acoustic_scale=cli_args.acoustic_scale,
+        prosodic_scale=cli_args.prosodic_scale,
+    )

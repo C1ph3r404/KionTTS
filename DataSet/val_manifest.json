@@ -1,0 +1,1227 @@
+[
+  {
+    "id": "c5ff581a",
+    "clean_text": "The countenance of Lawton changed instantly, and his assumed quaintness vanished.",
+    "raw_text": "[sarcasm=0.7, disappointed=0.7, calm=0.8] The countenance of Lawton changed instantly, and his assumed quaintness vanished.",
+    "emotions": {
+      "disappointed": 0.7
+    },
+    "styles": {
+      "sarcasm": 0.7,
+      "calm": 0.8
+    },
+    "wav_path": "wavs/c5ff581a.wav"
+  },
+  {
+    "id": "3062cb70",
+    "clean_text": "The battery is at 98.8%.",
+    "raw_text": "[overjoyed=0.7] The battery is at 98.8%.",
+    "emotions": {
+      "overjoyed": 0.7
+    },
+    "styles": {},
+    "wav_path": "wavs/3062cb70.wav"
+  },
+  {
+    "id": "df929806",
+    "clean_text": "What could I do?",
+    "raw_text": "[surprised=0.4] What could I do?",
+    "emotions": {
+      "surprised": 0.4
+    },
+    "styles": {},
+    "wav_path": "wavs/df929806.wav"
+  },
+  {
+    "id": "6b20f5e3",
+    "clean_text": "Here's some one we can eat!' They buzzed and stuck to him.",
+    "raw_text": "[frustrated=0.8] Here's some one we can eat!' They buzzed and stuck to him.",
+    "emotions": {
+      "frustrated": 0.8
+    },
+    "styles": {},
+    "wav_path": "wavs/6b20f5e3.wav"
+  },
+  {
+    "id": "34e83254",
+    "clean_text": "That which causes honor and greatness is the splendor and bounty of the divine perfections.",
+    "raw_text": "[calm=0.6] That which causes honor and greatness is the splendor and bounty of the divine perfections.",
+    "emotions": {},
+    "styles": {
+      "calm": 0.6
+    },
+    "wav_path": "wavs/34e83254.wav"
+  },
+  {
+    "id": "a23f7146",
+    "clean_text": "What-I glanced at Mercer, and he laughed aloud with pleasure and excitement.",
+    "raw_text": "[annoyed=0.8] What-I glanced at Mercer, and he laughed aloud with pleasure and excitement.",
+    "emotions": {
+      "annoyed": 0.8
+    },
+    "styles": {},
+    "wav_path": "wavs/a23f7146.wav"
+  },
+  {
+    "id": "fce28e2a",
+    "clean_text": "\"I may love him with all my heart now. Oh, I will, I will, if he will but let me and forgive me.\" I believe it was this feeling rushed over all the others which agitated that gentle little bosom.",
+    "raw_text": "[affectionate=0.6] \"I may love him with all my heart now. Oh, I will, I will, if he will but let me and forgive me.\" I believe it was this feeling rushed over all the others which agitated that gentle little bosom.",
+    "emotions": {},
+    "styles": {
+      "affectionate": 0.6
+    },
+    "wav_path": "wavs/fce28e2a.wav"
+  },
+  {
+    "id": "2c38bb0a",
+    "clean_text": "When it was found that treachery could do nothing, arbitrary power was used.",
+    "raw_text": "[frustrated=0.5] When it was found that treachery could do nothing, arbitrary power was used.",
+    "emotions": {
+      "frustrated": 0.5
+    },
+    "styles": {},
+    "wav_path": "wavs/2c38bb0a.wav"
+  },
+  {
+    "id": "2c24562f",
+    "clean_text": "Lycidas and I tumbled in on the back seat, each with a child in his lap to keep us warm; I was flanked by Sam Perry, and he by john Rich, both of the mercurial age, and therefore good to do errands.",
+    "raw_text": "[angry=0.8] Lycidas and I tumbled in on the back seat, each with a child in his lap to keep us warm; I was flanked by Sam Perry, and he by john Rich, both of the mercurial age, and therefore good to do errands.",
+    "emotions": {
+      "angry": 0.8
+    },
+    "styles": {},
+    "wav_path": "wavs/2c24562f.wav"
+  },
+  {
+    "id": "a856b385",
+    "clean_text": "But on my first excursion to the summit the whole mountain, down to its low swelling base, was smoothly laden with loose fresh snow, presenting a most glorious mass of winter mountain scenery, in the midst of which I scrambled and reveled or lay snugly snowbound, enjoying the fertile clouds and the snow bloom in all their growing, drifting grandeur.",
+    "raw_text": "[sarcasm=0.4] But on my first excursion to the summit the whole mountain, down to its low swelling base, was smoothly laden with loose fresh snow, presenting a most glorious mass of winter mountain scenery, in the midst of which I scrambled and reveled or lay snugly snowbound, enjoying the fertile clouds and the snow bloom in all their growing, drifting grandeur.",
+    "emotions": {},
+    "styles": {
+      "sarcasm": 0.4
+    },
+    "wav_path": "wavs/a856b385.wav"
+  },
+  {
+    "id": "260a4185",
+    "clean_text": "Hearken! and observe how healthily-how calmly I can tell you the whole story.",
+    "raw_text": "[surprised=0.5] Hearken! and observe how healthily-how calmly I can tell you the whole story.",
+    "emotions": {
+      "surprised": 0.5
+    },
+    "styles": {},
+    "wav_path": "wavs/260a4185.wav"
+  },
+  {
+    "id": "a3ef6771",
+    "clean_text": "But they were, doubtless, lying asleep in the cabins below, as the passage was to take place during the night.",
+    "raw_text": "[dramatic=0.3] But they were, doubtless, lying asleep in the cabins below, as the passage was to take place during the night.",
+    "emotions": {},
+    "styles": {
+      "dramatic": 0.3
+    },
+    "wav_path": "wavs/a3ef6771.wav"
+  },
+  {
+    "id": "f38e60ce",
+    "clean_text": "His work took him a large part of the day, but as the visiting was done on foot, and considerable distances had to be traversed, it was a training in itself.",
+    "raw_text": "[calm=0.3] His work took him a large part of the day, but as the visiting was done on foot, and considerable distances had to be traversed, it was a training in itself.",
+    "emotions": {},
+    "styles": {
+      "calm": 0.3
+    },
+    "wav_path": "wavs/f38e60ce.wav"
+  },
+  {
+    "id": "982f6162",
+    "clean_text": "I remembered the first time I saw Ethel Broughton, fully five years before.",
+    "raw_text": "[deadpan=0.4] I remembered the first time I saw Ethel Broughton, fully five years before.",
+    "emotions": {},
+    "styles": {
+      "deadpan": 0.4
+    },
+    "wav_path": "wavs/982f6162.wav"
+  },
+  {
+    "id": "9d748382",
+    "clean_text": "\"Did Eradicate see the man?\"",
+    "raw_text": "[annoyed=0.8] \"Did Eradicate see the man?\"",
+    "emotions": {
+      "annoyed": 0.8
+    },
+    "styles": {},
+    "wav_path": "wavs/9d748382.wav"
+  },
+  {
+    "id": "d2c2f2fe",
+    "clean_text": "The women sit on the men's laps.",
+    "raw_text": "[soothing=0.8] The women sit on the men's laps.",
+    "emotions": {},
+    "styles": {
+      "soothing": 0.8
+    },
+    "wav_path": "wavs/d2c2f2fe.wav"
+  },
+  {
+    "id": "10233bda",
+    "clean_text": "But after having bidden them farewell, and obtained all necessary information as to his road, he determined to look again for the hermitage on the hill, and so to ascertain whether he had really been deceived.",
+    "raw_text": "[playful=0.4] But after having bidden them farewell, and obtained all necessary information as to his road, he determined to look again for the hermitage on the hill, and so to ascertain whether he had really been deceived.",
+    "emotions": {},
+    "styles": {
+      "playful": 0.4
+    },
+    "wav_path": "wavs/10233bda.wav"
+  },
+  {
+    "id": "1c953b6b",
+    "clean_text": "\"The lightning is attracted to it!\"",
+    "raw_text": "[heartbroken=0.9, affectionate=0.6] \"The lightning is attracted to it!\"",
+    "emotions": {
+      "heartbroken": 0.9
+    },
+    "styles": {
+      "affectionate": 0.6
+    },
+    "wav_path": "wavs/1c953b6b.wav"
+  },
+  {
+    "id": "c722fd81",
+    "clean_text": "I am 14.84% sure that we locked the door.",
+    "raw_text": "[bored=0.4] I am 14.84% sure that we locked the door.",
+    "emotions": {
+      "bored": 0.4
+    },
+    "styles": {},
+    "wav_path": "wavs/c722fd81.wav"
+  },
+  {
+    "id": "6c1c4fc7",
+    "clean_text": "\"Oh NO-you-you don't understand.\"",
+    "raw_text": "[confused=0.6] \"Oh NO-you-you don't understand.\"",
+    "emotions": {
+      "confused": 0.6
+    },
+    "styles": {},
+    "wav_path": "wavs/6c1c4fc7.wav"
+  },
+  {
+    "id": "067783ad",
+    "clean_text": "\u2014It looks well at least; quoth my father to himself.",
+    "raw_text": "[soothing=0.5] \u2014It looks well at least; quoth my father to himself.",
+    "emotions": {},
+    "styles": {
+      "soothing": 0.5
+    },
+    "wav_path": "wavs/067783ad.wav"
+  },
+  {
+    "id": "41ecc710",
+    "clean_text": "\"Feel that!\" said he.",
+    "raw_text": "[disappointed=0.7, sarcasm=0.6] \"Feel that!\" said he.",
+    "emotions": {
+      "disappointed": 0.7
+    },
+    "styles": {
+      "sarcasm": 0.6
+    },
+    "wav_path": "wavs/41ecc710.wav"
+  },
+  {
+    "id": "87c3b932",
+    "clean_text": "Presently I saw the great eyes of my beast bulging completely from their sockets and blood flowing from its nostrils. That he was weakening perceptibly was evident, but so also was the ape, whose struggles were growing momentarily less.",
+    "raw_text": "[happy=0.6] Presently I saw the great eyes of my beast bulging completely from their sockets and blood flowing from its nostrils. That he was weakening perceptibly was evident, but so also was the ape, whose struggles were growing momentarily less.",
+    "emotions": {
+      "happy": 0.6
+    },
+    "styles": {},
+    "wav_path": "wavs/87c3b932.wav"
+  },
+  {
+    "id": "15619617",
+    "clean_text": "The multiplier is set to 52.34.",
+    "raw_text": "[confused=0.4] The multiplier is set to 52.34.",
+    "emotions": {
+      "confused": 0.4
+    },
+    "styles": {},
+    "wav_path": "wavs/15619617.wav"
+  },
+  {
+    "id": "6036bacf",
+    "clean_text": "Under his care all the crops flourished exceedingly, but the master proved to be wasteful and ungrateful, and Rubezahl soon left him, and went to be shepherd to his next neighbour.",
+    "raw_text": "[affectionate=0.5] Under his care all the crops flourished exceedingly, but the master proved to be wasteful and ungrateful, and Rubezahl soon left him, and went to be shepherd to his next neighbour.",
+    "emotions": {},
+    "styles": {
+      "affectionate": 0.5
+    },
+    "wav_path": "wavs/6036bacf.wav"
+  },
+  {
+    "id": "8df4bd9e",
+    "clean_text": "To this speech Bingley made no answer; but his sisters gave it their hearty assent, and indulged their mirth for some time at the expense of their dear friend's vulgar relations.",
+    "raw_text": "[affectionate=0.8] To this speech Bingley made no answer; but his sisters gave it their hearty assent, and indulged their mirth for some time at the expense of their dear friend's vulgar relations.",
+    "emotions": {},
+    "styles": {
+      "affectionate": 0.8
+    },
+    "wav_path": "wavs/8df4bd9e.wav"
+  },
+  {
+    "id": "da2e4aad",
+    "clean_text": "Passion there was none.",
+    "raw_text": "[confused=0.6] Passion there was none.",
+    "emotions": {
+      "confused": 0.6
+    },
+    "styles": {},
+    "wav_path": "wavs/da2e4aad.wav"
+  },
+  {
+    "id": "a85fb226",
+    "clean_text": "It took me an hour to place my whole head within the opening so far that I could see him as he lay upon his bed.",
+    "raw_text": "[bored=0.4] It took me an hour to place my whole head within the opening so far that I could see him as he lay upon his bed.",
+    "emotions": {
+      "bored": 0.4
+    },
+    "styles": {},
+    "wav_path": "wavs/a85fb226.wav"
+  },
+  {
+    "id": "760ea898",
+    "clean_text": "I only have \u20ac1,443.64 left in my wallet.",
+    "raw_text": "[surprised=0.5] I only have \u20ac1,443.64 left in my wallet.",
+    "emotions": {
+      "surprised": 0.5
+    },
+    "styles": {},
+    "wav_path": "wavs/760ea898.wav"
+  },
+  {
+    "id": "5a1cfa59",
+    "clean_text": "Call me back around 7:15.",
+    "raw_text": "[surprised=0.3] Call me back around 7:15.",
+    "emotions": {
+      "surprised": 0.3
+    },
+    "styles": {},
+    "wav_path": "wavs/5a1cfa59.wav"
+  },
+  {
+    "id": "290e3312",
+    "clean_text": "Passion there was none.",
+    "raw_text": "[angry=0.8, dramatic=0.8] Passion there was none.",
+    "emotions": {
+      "angry": 0.8
+    },
+    "styles": {
+      "dramatic": 0.8
+    },
+    "wav_path": "wavs/290e3312.wav"
+  },
+  {
+    "id": "fbb81c3e",
+    "clean_text": "It decided to remove the pickets.",
+    "raw_text": "[heartbroken=0.4] It decided to remove the pickets.",
+    "emotions": {
+      "heartbroken": 0.4
+    },
+    "styles": {},
+    "wav_path": "wavs/fbb81c3e.wav"
+  },
+  {
+    "id": "7c498b71",
+    "clean_text": "The proprietor reached for a book that lay above his desk.",
+    "raw_text": "[confused=0.5] The proprietor reached for a book that lay above his desk.",
+    "emotions": {
+      "confused": 0.5
+    },
+    "styles": {},
+    "wav_path": "wavs/7c498b71.wav"
+  },
+  {
+    "id": "1156f83a",
+    "clean_text": "This second laugh, wilder yet than the first, might have been taken for a sob.",
+    "raw_text": "[calm=0.7] This second laugh, wilder yet than the first, might have been taken for a sob.",
+    "emotions": {},
+    "styles": {
+      "calm": 0.7
+    },
+    "wav_path": "wavs/1156f83a.wav"
+  },
+  {
+    "id": "a79825d6",
+    "clean_text": "This moment was brief.",
+    "raw_text": "[serious=0.8, authoritative=0.8] This moment was brief.",
+    "emotions": {},
+    "styles": {
+      "serious": 0.8,
+      "authoritative": 0.8
+    },
+    "wav_path": "wavs/a79825d6.wav"
+  },
+  {
+    "id": "553bcdc1",
+    "clean_text": "The Woodchucks, sometimes called Ground Hogs, though why any one should call them this is more than I can understand, belong to the Marmot branch of the Squirrel family, and wherever found they look much alike.",
+    "raw_text": "[curious=0.3] The Woodchucks, sometimes called Ground Hogs, though why any one should call them this is more than I can understand, belong to the Marmot branch of the Squirrel family, and wherever found they look much alike.",
+    "emotions": {
+      "curious": 0.3
+    },
+    "styles": {},
+    "wav_path": "wavs/553bcdc1.wav"
+  },
+  {
+    "id": "44c6e49f",
+    "clean_text": "\"Well, then, listen.\"",
+    "raw_text": "[heartbroken=0.5] \"Well, then, listen.\"",
+    "emotions": {
+      "heartbroken": 0.5
+    },
+    "styles": {},
+    "wav_path": "wavs/44c6e49f.wav"
+  },
+  {
+    "id": "af076eb0",
+    "clean_text": "We were the Ice Bank's prisoners! The Canadian banged a table with his fearsome fist.",
+    "raw_text": "[dramatic=0.5] We were the Ice Bank's prisoners! The Canadian banged a table with his fearsome fist.",
+    "emotions": {},
+    "styles": {
+      "dramatic": 0.5
+    },
+    "wav_path": "wavs/af076eb0.wav"
+  },
+  {
+    "id": "692f7c2e",
+    "clean_text": "He had a shabby office near Dick's stand, and every morning Dick blacked his boots for him, and quite often they were not exactly watertight, but he always had a friendly word or a joke for Dick.",
+    "raw_text": "[playful=0.3] He had a shabby office near Dick's stand, and every morning Dick blacked his boots for him, and quite often they were not exactly watertight, but he always had a friendly word or a joke for Dick.",
+    "emotions": {},
+    "styles": {
+      "playful": 0.3
+    },
+    "wav_path": "wavs/692f7c2e.wav"
+  },
+  {
+    "id": "b209b551",
+    "clean_text": "I am 5.19% sure that we locked the door.",
+    "raw_text": "[frustrated=0.5] I am 5.19% sure that we locked the door.",
+    "emotions": {
+      "frustrated": 0.5
+    },
+    "styles": {},
+    "wav_path": "wavs/b209b551.wav"
+  },
+  {
+    "id": "8fb6129e",
+    "clean_text": "She gave her attention to the second drawer.",
+    "raw_text": "[affectionate=0.6] She gave her attention to the second drawer.",
+    "emotions": {},
+    "styles": {
+      "affectionate": 0.6
+    },
+    "wav_path": "wavs/8fb6129e.wav"
+  },
+  {
+    "id": "06b8a89e",
+    "clean_text": "In works of art Psyche is represented as a maiden with the wings of a butterfly, along with Cupid, in the different situations described in the allegory.",
+    "raw_text": "[happy=0.5] In works of art Psyche is represented as a maiden with the wings of a butterfly, along with Cupid, in the different situations described in the allegory.",
+    "emotions": {
+      "happy": 0.5
+    },
+    "styles": {},
+    "wav_path": "wavs/06b8a89e.wav"
+  },
+  {
+    "id": "c7192e91",
+    "clean_text": "\"The guarantee and the morality of labor.\"",
+    "raw_text": "[excited=0.5] \"The guarantee and the morality of labor.\"",
+    "emotions": {
+      "excited": 0.5
+    },
+    "styles": {},
+    "wav_path": "wavs/c7192e91.wav"
+  },
+  {
+    "id": "76353495",
+    "clean_text": "The reverse of a silhouette-a city painted in white on a black horizon, something like what we call nowadays a negative proof.",
+    "raw_text": "[curious=0.5] The reverse of a silhouette-a city painted in white on a black horizon, something like what we call nowadays a negative proof.",
+    "emotions": {
+      "curious": 0.5
+    },
+    "styles": {},
+    "wav_path": "wavs/76353495.wav"
+  },
+  {
+    "id": "13315c33",
+    "clean_text": "He was delighted to see me, and insisted on my becoming his guest.",
+    "raw_text": "[happy=0.4] He was delighted to see me, and insisted on my becoming his guest.",
+    "emotions": {
+      "happy": 0.4
+    },
+    "styles": {},
+    "wav_path": "wavs/13315c33.wav"
+  },
+  {
+    "id": "a8f1f93a",
+    "clean_text": "\"What is it?\" asked her husband.",
+    "raw_text": "[playful=0.5] \"What is it?\" asked her husband.",
+    "emotions": {},
+    "styles": {
+      "playful": 0.5
+    },
+    "wav_path": "wavs/a8f1f93a.wav"
+  },
+  {
+    "id": "bf073c4f",
+    "clean_text": "But funded income is the more abiding, for income from wages stops when the man dies or fails to perform his work, while the income from wealth continues after he ceases to be active.",
+    "raw_text": "[bored=0.6] But funded income is the more abiding, for income from wages stops when the man dies or fails to perform his work, while the income from wealth continues after he ceases to be active.",
+    "emotions": {
+      "bored": 0.6
+    },
+    "styles": {},
+    "wav_path": "wavs/bf073c4f.wav"
+  },
+  {
+    "id": "b8b10253",
+    "clean_text": "Five beat, seven beat, nine beat, and twelve beat measures are also classified as compound measures.",
+    "raw_text": "[teasing=0.4] Five beat, seven beat, nine beat, and twelve beat measures are also classified as compound measures.",
+    "emotions": {},
+    "styles": {
+      "teasing": 0.4
+    },
+    "wav_path": "wavs/b8b10253.wav"
+  },
+  {
+    "id": "8b30b5a1",
+    "clean_text": "\"I am afraid, little sister, \" she whispered for the third time.",
+    "raw_text": "[sarcasm=0.7, disappointed=0.7, calm=0.8] \"I am afraid, little sister, \" she whispered for the third time.",
+    "emotions": {
+      "disappointed": 0.7
+    },
+    "styles": {
+      "sarcasm": 0.7,
+      "calm": 0.8
+    },
+    "wav_path": "wavs/8b30b5a1.wav"
+  },
+  {
+    "id": "4d500612",
+    "clean_text": "There was no applause; but they whispered together for a long time.",
+    "raw_text": "[soothing=0.6] There was no applause; but they whispered together for a long time.",
+    "emotions": {},
+    "styles": {
+      "soothing": 0.6
+    },
+    "wav_path": "wavs/4d500612.wav"
+  },
+  {
+    "id": "00430c5a",
+    "clean_text": "He drove in cabs from Harley Street to Wimpole Street, and from Wimpole Street to Brooke Street-and he saw Sir William this and Sir Henry that, and Mr. The other thing, the great heart specialist.",
+    "raw_text": "[concerned=0.7, serious=0.7] He drove in cabs from Harley Street to Wimpole Street, and from Wimpole Street to Brooke Street-and he saw Sir William this and Sir Henry that, and Mr. The other thing, the great heart specialist.",
+    "emotions": {
+      "concerned": 0.7
+    },
+    "styles": {
+      "serious": 0.7
+    },
+    "wav_path": "wavs/00430c5a.wav"
+  },
+  {
+    "id": "ec5553ec",
+    "clean_text": "If an army, I would exterminate it.",
+    "raw_text": "[frustrated=0.7] If an army, I would exterminate it.",
+    "emotions": {
+      "frustrated": 0.7
+    },
+    "styles": {},
+    "wav_path": "wavs/ec5553ec.wav"
+  },
+  {
+    "id": "aaf228ff",
+    "clean_text": "It is but an accident of the atmosphere-the portent of an approaching storm.",
+    "raw_text": "[playful=0.4] It is but an accident of the atmosphere-the portent of an approaching storm.",
+    "emotions": {},
+    "styles": {
+      "playful": 0.4
+    },
+    "wav_path": "wavs/aaf228ff.wav"
+  },
+  {
+    "id": "c88047a6",
+    "clean_text": "The deadline is July 18 1942.",
+    "raw_text": "[calm=0.7] The deadline is July 18 1942.",
+    "emotions": {},
+    "styles": {
+      "calm": 0.7
+    },
+    "wav_path": "wavs/c88047a6.wav"
+  },
+  {
+    "id": "53f0dbce",
+    "clean_text": "\"I should not like that, \" said Porthos.",
+    "raw_text": "[authoritative=0.3] \"I should not like that, \" said Porthos.",
+    "emotions": {},
+    "styles": {
+      "authoritative": 0.3
+    },
+    "wav_path": "wavs/53f0dbce.wav"
+  },
+  {
+    "id": "74d82a06",
+    "clean_text": "This protestation, which, though just and legal, was certainly ill timed, was signed by twelve bishops, and communicated to the king, who hastily approved of it.",
+    "raw_text": "[teasing=0.4] This protestation, which, though just and legal, was certainly ill timed, was signed by twelve bishops, and communicated to the king, who hastily approved of it.",
+    "emotions": {},
+    "styles": {
+      "teasing": 0.4
+    },
+    "wav_path": "wavs/74d82a06.wav"
+  },
+  {
+    "id": "30719cee",
+    "clean_text": "Ripping up the envelope with evident astonishment he read it; his face clouded a little, and then cleared, and he turned to his brother in law and host.",
+    "raw_text": "[serious=0.7] Ripping up the envelope with evident astonishment he read it; his face clouded a little, and then cleared, and he turned to his brother in law and host.",
+    "emotions": {},
+    "styles": {
+      "serious": 0.7
+    },
+    "wav_path": "wavs/30719cee.wav"
+  },
+  {
+    "id": "813a0212",
+    "clean_text": "Set your alarm for 3:00 PM tomorrow.",
+    "raw_text": "[authoritative=0.4] Set your alarm for 3:00 PM tomorrow.",
+    "emotions": {},
+    "styles": {
+      "authoritative": 0.4
+    },
+    "wav_path": "wavs/813a0212.wav"
+  },
+  {
+    "id": "daac4072",
+    "clean_text": "\"He's coming again to morrow, \" added Leopold, almost gleefully, \"and then perhaps he will tell me more, and help me on a bit!\"",
+    "raw_text": "[concerned=0.7] \"He's coming again to morrow, \" added Leopold, almost gleefully, \"and then perhaps he will tell me more, and help me on a bit!\"",
+    "emotions": {
+      "concerned": 0.7
+    },
+    "styles": {},
+    "wav_path": "wavs/daac4072.wav"
+  },
+  {
+    "id": "3318ff16",
+    "clean_text": "Nero was a titanic lighterman.",
+    "raw_text": "[dramatic=0.6] Nero was a titanic lighterman.",
+    "emotions": {},
+    "styles": {
+      "dramatic": 0.6
+    },
+    "wav_path": "wavs/3318ff16.wav"
+  },
+  {
+    "id": "ce49b525",
+    "clean_text": "Word of what Eric meant to do got out, and men laughed and said:",
+    "raw_text": "[serious=0.7] Word of what Eric meant to do got out, and men laughed and said:",
+    "emotions": {},
+    "styles": {
+      "serious": 0.7
+    },
+    "wav_path": "wavs/ce49b525.wav"
+  },
+  {
+    "id": "0f059131",
+    "clean_text": "On the morrow they buried the papoose, and afterward, both morning and evening, there came a company to mourn and howl with her; though I confess I could not much condole with them.",
+    "raw_text": "[overjoyed=0.6] On the morrow they buried the papoose, and afterward, both morning and evening, there came a company to mourn and howl with her; though I confess I could not much condole with them.",
+    "emotions": {
+      "overjoyed": 0.6
+    },
+    "styles": {},
+    "wav_path": "wavs/0f059131.wav"
+  },
+  {
+    "id": "fdd83ea9",
+    "clean_text": "It is their 19th anniversary.",
+    "raw_text": "[sad=0.4] It is their 19th anniversary.",
+    "emotions": {
+      "sad": 0.4
+    },
+    "styles": {},
+    "wav_path": "wavs/fdd83ea9.wav"
+  },
+  {
+    "id": "6eda4a7c",
+    "clean_text": "\"Had enough?\" asked the assistant, breathing fiercely through his nose.",
+    "raw_text": "[heartbroken=0.5] \"Had enough?\" asked the assistant, breathing fiercely through his nose.",
+    "emotions": {
+      "heartbroken": 0.5
+    },
+    "styles": {},
+    "wav_path": "wavs/6eda4a7c.wav"
+  },
+  {
+    "id": "35292bdb",
+    "clean_text": "At first, when she put me down on a stone in some water, I did not know that I was in prison.",
+    "raw_text": "[heartbroken=0.9, affectionate=0.6] At first, when she put me down on a stone in some water, I did not know that I was in prison.",
+    "emotions": {
+      "heartbroken": 0.9
+    },
+    "styles": {
+      "affectionate": 0.6
+    },
+    "wav_path": "wavs/35292bdb.wav"
+  },
+  {
+    "id": "807267cf",
+    "clean_text": "There was a great red thing in the yard beside it, but I liked the white one better.",
+    "raw_text": "[happy=0.6] There was a great red thing in the yard beside it, but I liked the white one better.",
+    "emotions": {
+      "happy": 0.6
+    },
+    "styles": {},
+    "wav_path": "wavs/807267cf.wav"
+  },
+  {
+    "id": "1f53d716",
+    "clean_text": "He told me that my Aunt Eliza, his first wife, was ill, and that he had married a second time; Lizzie Guss, my cousin, I thought was the most annoying girl I had ever seen.",
+    "raw_text": "[disappointed=0.8] He told me that my Aunt Eliza, his first wife, was ill, and that he had married a second time; Lizzie Guss, my cousin, I thought was the most annoying girl I had ever seen.",
+    "emotions": {
+      "disappointed": 0.8
+    },
+    "styles": {},
+    "wav_path": "wavs/1f53d716.wav"
+  },
+  {
+    "id": "7d4993da",
+    "clean_text": "A perpendicular bluff rose from the highwater mark, leaving no place for camp fire or bed.",
+    "raw_text": "[deadpan=0.6] A perpendicular bluff rose from the highwater mark, leaving no place for camp fire or bed.",
+    "emotions": {},
+    "styles": {
+      "deadpan": 0.6
+    },
+    "wav_path": "wavs/7d4993da.wav"
+  },
+  {
+    "id": "16e5c3d6",
+    "clean_text": "In sixteen eighty one the interior, like the exterior, is sternly bare.",
+    "raw_text": "[sad=0.4] In sixteen eighty one the interior, like the exterior, is sternly bare.",
+    "emotions": {
+      "sad": 0.4
+    },
+    "styles": {},
+    "wav_path": "wavs/16e5c3d6.wav"
+  },
+  {
+    "id": "1079f599",
+    "clean_text": "The event took place in 1801.",
+    "raw_text": "[angry=0.3] The event took place in 1801.",
+    "emotions": {
+      "angry": 0.3
+    },
+    "styles": {},
+    "wav_path": "wavs/1079f599.wav"
+  },
+  {
+    "id": "a291cb16",
+    "clean_text": "\"So that, as you confess, you are jealous?\"",
+    "raw_text": "[curious=0.5] \"So that, as you confess, you are jealous?\"",
+    "emotions": {
+      "curious": 0.5
+    },
+    "styles": {},
+    "wav_path": "wavs/a291cb16.wav"
+  },
+  {
+    "id": "46a4b15f",
+    "clean_text": "Each time the fly touched his face it gave him a burning sensation and yet to his surprise it did not destroy the structure, though it knocked against the very region of his face where it was rising.",
+    "raw_text": "[sarcasm=0.3] Each time the fly touched his face it gave him a burning sensation and yet to his surprise it did not destroy the structure, though it knocked against the very region of his face where it was rising.",
+    "emotions": {},
+    "styles": {
+      "sarcasm": 0.3
+    },
+    "wav_path": "wavs/46a4b15f.wav"
+  },
+  {
+    "id": "0d09e30c",
+    "clean_text": "The latter, faithful to the principle of Horace, nil admirari, had contented himself with showing his knowledge by declaring in what lake the best lampreys were caught.",
+    "raw_text": "[bored=0.7] The latter, faithful to the principle of Horace, nil admirari, had contented himself with showing his knowledge by declaring in what lake the best lampreys were caught.",
+    "emotions": {
+      "bored": 0.7
+    },
+    "styles": {},
+    "wav_path": "wavs/0d09e30c.wav"
+  },
+  {
+    "id": "74ff028b",
+    "clean_text": "I shook my head sadly.",
+    "raw_text": "[deadpan=0.5] I shook my head sadly.",
+    "emotions": {},
+    "styles": {
+      "deadpan": 0.5
+    },
+    "wav_path": "wavs/74ff028b.wav"
+  },
+  {
+    "id": "6d6bd62f",
+    "clean_text": "In the place late occupied by him another stands.",
+    "raw_text": "[curious=0.7] In the place late occupied by him another stands.",
+    "emotions": {
+      "curious": 0.7
+    },
+    "styles": {},
+    "wav_path": "wavs/6d6bd62f.wav"
+  },
+  {
+    "id": "725f9c80",
+    "clean_text": "Bark was laid upon the outside, and earth was thrown over the whole structure.",
+    "raw_text": "[teasing=0.4] Bark was laid upon the outside, and earth was thrown over the whole structure.",
+    "emotions": {},
+    "styles": {
+      "teasing": 0.4
+    },
+    "wav_path": "wavs/725f9c80.wav"
+  },
+  {
+    "id": "69ad8e70",
+    "clean_text": "They walked among the firs until the stars came out, and they talked of many things.",
+    "raw_text": "[disappointed=0.3] They walked among the firs until the stars came out, and they talked of many things.",
+    "emotions": {
+      "disappointed": 0.3
+    },
+    "styles": {},
+    "wav_path": "wavs/69ad8e70.wav"
+  },
+  {
+    "id": "a79c2e74",
+    "clean_text": "In response to the demand for increased range, as many as twenty keys were brought to act on a few strings, commanding often three octaves.",
+    "raw_text": "[bored=0.7] In response to the demand for increased range, as many as twenty keys were brought to act on a few strings, commanding often three octaves.",
+    "emotions": {
+      "bored": 0.7
+    },
+    "styles": {},
+    "wav_path": "wavs/a79c2e74.wav"
+  },
+  {
+    "id": "b3e18a19",
+    "clean_text": "\"No, no!\"",
+    "raw_text": "[concerned=0.7, soothing=0.7] \"No, no!\"",
+    "emotions": {
+      "concerned": 0.7
+    },
+    "styles": {
+      "soothing": 0.7
+    },
+    "wav_path": "wavs/b3e18a19.wav"
+  },
+  {
+    "id": "a4377618",
+    "clean_text": "These traits cannot be changed overnight.",
+    "raw_text": "[serious=0.4] These traits cannot be changed overnight.",
+    "emotions": {},
+    "styles": {
+      "serious": 0.4
+    },
+    "wav_path": "wavs/a4377618.wav"
+  },
+  {
+    "id": "e4817533",
+    "clean_text": "The manifestations of popular approval of suffrage, the constant stream of protests to the Administration against its delay nationally, and the shame of having women begging at its gates, could result in only one of two things.",
+    "raw_text": "[sad=0.8] The manifestations of popular approval of suffrage, the constant stream of protests to the Administration against its delay nationally, and the shame of having women begging at its gates, could result in only one of two things.",
+    "emotions": {
+      "sad": 0.8
+    },
+    "styles": {},
+    "wav_path": "wavs/e4817533.wav"
+  },
+  {
+    "id": "a689c33a",
+    "clean_text": "\"Oh, Alice, my dear, \" pleaded Mrs. Greggory again, feebly.",
+    "raw_text": "[playful=0.4] \"Oh, Alice, my dear, \" pleaded Mrs. Greggory again, feebly.",
+    "emotions": {},
+    "styles": {
+      "playful": 0.4
+    },
+    "wav_path": "wavs/a689c33a.wav"
+  },
+  {
+    "id": "4725b1c6",
+    "clean_text": "The story of Cupid and Psyche first appears in the works of Apuleius, a writer of the second century of our era.",
+    "raw_text": "[frustrated=0.7, dramatic=0.8] The story of Cupid and Psyche first appears in the works of Apuleius, a writer of the second century of our era.",
+    "emotions": {
+      "frustrated": 0.7
+    },
+    "styles": {
+      "dramatic": 0.8
+    },
+    "wav_path": "wavs/4725b1c6.wav"
+  },
+  {
+    "id": "d52545c5",
+    "clean_text": "On one side of the house stood the stable, on the other an alley or cloister of laurels led to the larger garden behind.",
+    "raw_text": "[concerned=0.6] On one side of the house stood the stable, on the other an alley or cloister of laurels led to the larger garden behind.",
+    "emotions": {
+      "concerned": 0.6
+    },
+    "styles": {},
+    "wav_path": "wavs/d52545c5.wav"
+  },
+  {
+    "id": "482de2d6",
+    "clean_text": "Mrs. Belostoma may go with me, if she feels like doing so after laying her eggs here.",
+    "raw_text": "[disappointed=0.7, serious=0.7] Mrs. Belostoma may go with me, if she feels like doing so after laying her eggs here.",
+    "emotions": {
+      "disappointed": 0.7
+    },
+    "styles": {
+      "serious": 0.7
+    },
+    "wav_path": "wavs/482de2d6.wav"
+  },
+  {
+    "id": "bf27d5cd",
+    "clean_text": "\"I guess that will be far enough to let him fall, \" went on the diamond seeker.",
+    "raw_text": "[dramatic=0.6] \"I guess that will be far enough to let him fall, \" went on the diamond seeker.",
+    "emotions": {},
+    "styles": {
+      "dramatic": 0.6
+    },
+    "wav_path": "wavs/bf27d5cd.wav"
+  },
+  {
+    "id": "33b63e21",
+    "clean_text": "But the men did not know how this was to be done, and, shaking their heads over his obstinacy, left him to his fate.",
+    "raw_text": "[dramatic=0.4] But the men did not know how this was to be done, and, shaking their heads over his obstinacy, left him to his fate.",
+    "emotions": {},
+    "styles": {
+      "dramatic": 0.4
+    },
+    "wav_path": "wavs/33b63e21.wav"
+  },
+  {
+    "id": "2cce6b3e",
+    "clean_text": "A sort of mud was found in his stomach.",
+    "raw_text": "[calm=0.7] A sort of mud was found in his stomach.",
+    "emotions": {},
+    "styles": {
+      "calm": 0.7
+    },
+    "wav_path": "wavs/2cce6b3e.wav"
+  },
+  {
+    "id": "faf23f7c",
+    "clean_text": "You may be very sure he was glad to go, and as he stalked off with her, he led the way to a charming nesting place.",
+    "raw_text": "[happy=0.5] You may be very sure he was glad to go, and as he stalked off with her, he led the way to a charming nesting place.",
+    "emotions": {
+      "happy": 0.5
+    },
+    "styles": {},
+    "wav_path": "wavs/faf23f7c.wav"
+  },
+  {
+    "id": "a1b62ce8",
+    "clean_text": "Combeferre took the word.",
+    "raw_text": "[overjoyed=0.7] Combeferre took the word.",
+    "emotions": {
+      "overjoyed": 0.7
+    },
+    "styles": {},
+    "wav_path": "wavs/a1b62ce8.wav"
+  },
+  {
+    "id": "12405af1",
+    "clean_text": "\"Broke his leg, has he?\"",
+    "raw_text": "[angry=0.8] \"Broke his leg, has he?\"",
+    "emotions": {
+      "angry": 0.8
+    },
+    "styles": {},
+    "wav_path": "wavs/12405af1.wav"
+  },
+  {
+    "id": "abb64b1f",
+    "clean_text": "The Japanese mind does not split hairs as to whether the Emperor is Heaven incarnate or the State incarnate.",
+    "raw_text": "[excited=0.4] The Japanese mind does not split hairs as to whether the Emperor is Heaven incarnate or the State incarnate.",
+    "emotions": {
+      "excited": 0.4
+    },
+    "styles": {},
+    "wav_path": "wavs/abb64b1f.wav"
+  },
+  {
+    "id": "77429532",
+    "clean_text": "Not he.",
+    "raw_text": "[serious=0.7] Not he.",
+    "emotions": {},
+    "styles": {
+      "serious": 0.7
+    },
+    "wav_path": "wavs/77429532.wav"
+  },
+  {
+    "id": "e9b3383e",
+    "clean_text": "\"Did he tell you he wants to bring a friend with him?\"",
+    "raw_text": "[annoyed=0.4] \"Did he tell you he wants to bring a friend with him?\"",
+    "emotions": {
+      "annoyed": 0.4
+    },
+    "styles": {},
+    "wav_path": "wavs/e9b3383e.wav"
+  },
+  {
+    "id": "80ee1d07",
+    "clean_text": "\"Jumbo\" goes all right when mounted, but, being unable to mount without aid, he seldom ventures abroad by himself for fear of having to foot it back.",
+    "raw_text": "[concerned=0.4] \"Jumbo\" goes all right when mounted, but, being unable to mount without aid, he seldom ventures abroad by himself for fear of having to foot it back.",
+    "emotions": {
+      "concerned": 0.4
+    },
+    "styles": {},
+    "wav_path": "wavs/80ee1d07.wav"
+  },
+  {
+    "id": "6f0a72fa",
+    "clean_text": "Thus adorned he was brought on shore to pay me a visit, and as he came through my door he appeared to be filled with the pride of patriotism and a realization of the greatness of the occasion.",
+    "raw_text": "[serious=0.8, authoritative=0.8] Thus adorned he was brought on shore to pay me a visit, and as he came through my door he appeared to be filled with the pride of patriotism and a realization of the greatness of the occasion.",
+    "emotions": {},
+    "styles": {
+      "serious": 0.8,
+      "authoritative": 0.8
+    },
+    "wav_path": "wavs/6f0a72fa.wav"
+  },
+  {
+    "id": "ec5af488",
+    "clean_text": "\"Go on, \" the leader was repeating.",
+    "raw_text": "[sarcasm=0.6] \"Go on, \" the leader was repeating.",
+    "emotions": {},
+    "styles": {
+      "sarcasm": 0.6
+    },
+    "wav_path": "wavs/ec5af488.wav"
+  },
+  {
+    "id": "0a15239b",
+    "clean_text": "\"What's the matter?\" I managed to interrupt him.",
+    "raw_text": "[curious=0.7] \"What's the matter?\" I managed to interrupt him.",
+    "emotions": {
+      "curious": 0.7
+    },
+    "styles": {},
+    "wav_path": "wavs/0a15239b.wav"
+  },
+  {
+    "id": "b55eac68",
+    "clean_text": "Only 8/3 of the items survived the trip.",
+    "raw_text": "[annoyed=0.4] Only 8/3 of the items survived the trip.",
+    "emotions": {
+      "annoyed": 0.4
+    },
+    "styles": {},
+    "wav_path": "wavs/b55eac68.wav"
+  },
+  {
+    "id": "a8698032",
+    "clean_text": "My frame rate doubled after installing the A100.",
+    "raw_text": "[overjoyed=0.6] My frame rate doubled after installing the A100.",
+    "emotions": {
+      "overjoyed": 0.6
+    },
+    "styles": {},
+    "wav_path": "wavs/a8698032.wav"
+  },
+  {
+    "id": "36221350",
+    "clean_text": "Afterwards, neither woman nor peddler was to be found.",
+    "raw_text": "[teasing=0.3] Afterwards, neither woman nor peddler was to be found.",
+    "emotions": {},
+    "styles": {
+      "teasing": 0.3
+    },
+    "wav_path": "wavs/36221350.wav"
+  },
+  {
+    "id": "00d6b12e",
+    "clean_text": "Make sure you buy a cable that is USB 4.0 certified.",
+    "raw_text": "[soothing=0.4] Make sure you buy a cable that is USB 4.0 certified.",
+    "emotions": {},
+    "styles": {
+      "soothing": 0.4
+    },
+    "wav_path": "wavs/00d6b12e.wav"
+  },
+  {
+    "id": "307a7fba",
+    "clean_text": "The field which I have cleared, which I cultivate, on which I have built my house, which supports myself, my family, and my livestock, I can possess: first.",
+    "raw_text": "[sarcasm=0.4] The field which I have cleared, which I cultivate, on which I have built my house, which supports myself, my family, and my livestock, I can possess: first.",
+    "emotions": {},
+    "styles": {
+      "sarcasm": 0.4
+    },
+    "wav_path": "wavs/307a7fba.wav"
+  },
+  {
+    "id": "e7cf3f3b",
+    "clean_text": "Bankers, merchants, and manufacturers, whose trade depended on exports and interchange of wealth, became bankrupt.",
+    "raw_text": "[annoyed=0.7] Bankers, merchants, and manufacturers, whose trade depended on exports and interchange of wealth, became bankrupt.",
+    "emotions": {
+      "annoyed": 0.7
+    },
+    "styles": {},
+    "wav_path": "wavs/e7cf3f3b.wav"
+  },
+  {
+    "id": "db3139ec",
+    "clean_text": "Would even her father require more of her than she had already done and endured?",
+    "raw_text": "[excited=0.4] Would even her father require more of her than she had already done and endured?",
+    "emotions": {
+      "excited": 0.4
+    },
+    "styles": {},
+    "wav_path": "wavs/db3139ec.wav"
+  },
+  {
+    "id": "6d96305d",
+    "clean_text": "Meanwhile the bull dog, the black and tan terrier, Alick's sheep dog, and the gander hissing at a safe distance from the pony's heels carried out the idea of Mrs. Poyser's solo in an impressive quartet.",
+    "raw_text": "[sad=0.6] Meanwhile the bull dog, the black and tan terrier, Alick's sheep dog, and the gander hissing at a safe distance from the pony's heels carried out the idea of Mrs. Poyser's solo in an impressive quartet.",
+    "emotions": {
+      "sad": 0.6
+    },
+    "styles": {},
+    "wav_path": "wavs/6d96305d.wav"
+  },
+  {
+    "id": "02c78af3",
+    "clean_text": "By 2034, everything had changed.",
+    "raw_text": "[excited=0.4] By 2034, everything had changed.",
+    "emotions": {
+      "excited": 0.4
+    },
+    "styles": {},
+    "wav_path": "wavs/02c78af3.wav"
+  },
+  {
+    "id": "8e41c64c",
+    "clean_text": "This family likeness may be traced in the fairy tales of all countries.",
+    "raw_text": "[confused=0.6, curious=0.7] This family likeness may be traced in the fairy tales of all countries.",
+    "emotions": {
+      "confused": 0.6,
+      "curious": 0.7
+    },
+    "styles": {},
+    "wav_path": "wavs/8e41c64c.wav"
+  },
+  {
+    "id": "cacc4d10",
+    "clean_text": "Robinson entered.",
+    "raw_text": "[deadpan=0.7] Robinson entered.",
+    "emotions": {},
+    "styles": {
+      "deadpan": 0.7
+    },
+    "wav_path": "wavs/cacc4d10.wav"
+  },
+  {
+    "id": "dc429549",
+    "clean_text": "In his first school \"composition, \" on \"Cruelty to Animals, \" his stepsister remembers this sentence: \"An ant's life is as sweet to it as ours is to us.\"",
+    "raw_text": "[affectionate=0.5] In his first school \"composition, \" on \"Cruelty to Animals, \" his stepsister remembers this sentence: \"An ant's life is as sweet to it as ours is to us.\"",
+    "emotions": {},
+    "styles": {
+      "affectionate": 0.5
+    },
+    "wav_path": "wavs/dc429549.wav"
+  },
+  {
+    "id": "533c859a",
+    "clean_text": "The deadline is June 5 1924.",
+    "raw_text": "[authoritative=0.3] The deadline is June 5 1924.",
+    "emotions": {},
+    "styles": {
+      "authoritative": 0.3
+    },
+    "wav_path": "wavs/533c859a.wav"
+  },
+  {
+    "id": "b65eaae8",
+    "clean_text": "The servants was a drinkin' up in the drawingroom.",
+    "raw_text": "[excited=0.4] The servants was a drinkin' up in the drawingroom.",
+    "emotions": {
+      "excited": 0.4
+    },
+    "styles": {},
+    "wav_path": "wavs/b65eaae8.wav"
+  },
+  {
+    "id": "4deea949",
+    "clean_text": "The man is really hateful; the action really mean; the situation really tragic-all in themselves and quite apart from our opinion.",
+    "raw_text": "[surprised=0.9] The man is really hateful; the action really mean; the situation really tragic-all in themselves and quite apart from our opinion.",
+    "emotions": {
+      "surprised": 0.9
+    },
+    "styles": {},
+    "wav_path": "wavs/4deea949.wav"
+  },
+  {
+    "id": "d1249ca6",
+    "clean_text": "Notwithstanding the vaunted refining influences of towns, purity of all kinds-pure hearts, pure streams, pure snow-must here be exposed to terrible trials.",
+    "raw_text": "[concerned=0.5] Notwithstanding the vaunted refining influences of towns, purity of all kinds-pure hearts, pure streams, pure snow-must here be exposed to terrible trials.",
+    "emotions": {
+      "concerned": 0.5
+    },
+    "styles": {},
+    "wav_path": "wavs/d1249ca6.wav"
+  },
+  {
+    "id": "ba10305e",
+    "clean_text": "\"I cannot comprehend the neglect of a family library in such days as these.\"",
+    "raw_text": "[teasing=0.8] \"I cannot comprehend the neglect of a family library in such days as these.\"",
+    "emotions": {},
+    "styles": {
+      "teasing": 0.8
+    },
+    "wav_path": "wavs/ba10305e.wav"
+  },
+  {
+    "id": "eb1926f9",
+    "clean_text": "As an excuse I talked over cases with him, but he seldom volunteered an opinion, often was obviously uninterested.",
+    "raw_text": "[overjoyed=0.5] As an excuse I talked over cases with him, but he seldom volunteered an opinion, often was obviously uninterested.",
+    "emotions": {
+      "overjoyed": 0.5
+    },
+    "styles": {},
+    "wav_path": "wavs/eb1926f9.wav"
+  },
+  {
+    "id": "56cb510a",
+    "clean_text": "But even yet I refrained and kept still.",
+    "raw_text": "[concerned=0.4] But even yet I refrained and kept still.",
+    "emotions": {
+      "concerned": 0.4
+    },
+    "styles": {},
+    "wav_path": "wavs/56cb510a.wav"
+  },
+  {
+    "id": "c91974d0",
+    "clean_text": "He had not gone far before he met a wolf, who was limping disconsolately along on three legs, and who on perceiving Ferko began to howl dismally.",
+    "raw_text": "[deadpan=0.7] He had not gone far before he met a wolf, who was limping disconsolately along on three legs, and who on perceiving Ferko began to howl dismally.",
+    "emotions": {},
+    "styles": {
+      "deadpan": 0.7
+    },
+    "wav_path": "wavs/c91974d0.wav"
+  },
+  {
+    "id": "39d743d0",
+    "clean_text": "The countenance of Lawton changed instantly, and his assumed quaintness vanished.",
+    "raw_text": "[sad=0.4] The countenance of Lawton changed instantly, and his assumed quaintness vanished.",
+    "emotions": {
+      "sad": 0.4
+    },
+    "styles": {},
+    "wav_path": "wavs/39d743d0.wav"
+  },
+  {
+    "id": "de09cde7",
+    "clean_text": "\"He's simply ripping!\" said the undergraduate.",
+    "raw_text": "[angry=0.4] \"He's simply ripping!\" said the undergraduate.",
+    "emotions": {
+      "angry": 0.4
+    },
+    "styles": {},
+    "wav_path": "wavs/de09cde7.wav"
+  }
+]

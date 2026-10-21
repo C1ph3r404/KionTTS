@@ -18,11 +18,20 @@ class KionTagStyleEncoder(nn.Module):
         affectionate, authoritative, calm, deadpan, dramatic, playful,
         sarcasm, serious, soothing, teasing
     """
-    def __init__(self, num_tags=24, emb_dim=64, style_dim=256):
+    def __init__(
+        self,
+        num_tags: int = 24,
+        emb_dim: int = 64,
+        style_dim: int = 256,
+        acoustic_scale: float = 1.0,
+        prosodic_scale: float = 1.0,
+    ):
         super().__init__()
         self.num_tags = num_tags
         self.emb_dim = emb_dim
         self.style_dim = style_dim
+        self.acoustic_scale = float(acoustic_scale)
+        self.prosodic_scale = float(prosodic_scale)
 
         # Learnable embedding table for each tag
         self.tag_embeddings = nn.Parameter(torch.randn(num_tags, emb_dim) * 0.02)
@@ -33,9 +42,9 @@ class KionTagStyleEncoder(nn.Module):
         # Multi-layer projection head mapping combined tag features to StyleTTS2 style space
         in_features = emb_dim + num_tags  # continuous embedding blend + raw intensity vector
         final_proj = nn.Linear(128, style_dim)
-        # Initialize final projection with small weights and zero bias so output starts
-        # centered at zero with norm ~0.3-0.5, matching StyleTTS2 teacher style manifold
-        nn.init.normal_(final_proj.weight, mean=0.0, std=0.02)
+        # Initialize final projection with std=0.08 (matching teacher coordinate std ~0.29)
+        # so fresh training runs start with healthy dynamic range matching the StyleTTS2 teacher manifold
+        nn.init.normal_(final_proj.weight, mean=0.0, std=0.08)
         nn.init.zeros_(final_proj.bias)
 
         self.proj = nn.Sequential(
@@ -44,6 +53,11 @@ class KionTagStyleEncoder(nn.Module):
             nn.GELU(),
             final_proj
         )
+
+    def set_scale_multipliers(self, acoustic: float = 2.5, prosodic: float = 3.1):
+        """Sets scale multipliers to bridge stage 1 under-scaled representations."""
+        self.acoustic_scale = float(acoustic)
+        self.prosodic_scale = float(prosodic)
 
     def forward(self, tag_vectors):
         """
@@ -67,28 +81,49 @@ class KionTagStyleEncoder(nn.Module):
 
         # Project to 256-d StyleTTS2 style space
         s_tag = self.proj(feat)
+
+        # Apply acoustic / prosodic scale multipliers if configured (e.g. for Stage 2 bridging)
+        if self.acoustic_scale != 1.0 or self.prosodic_scale != 1.0:
+            s_tag = torch.cat([
+                s_tag[:, :128] * self.acoustic_scale,
+                s_tag[:, 128:] * self.prosodic_scale,
+            ], dim=-1)
+
         return s_tag
 
 
-def compute_kion_style_loss(s_tag, s_audio, lambda_cos=0.5):
+def compute_kion_style_loss(s_tag, s_audio, lambda_cos=0.5, lambda_norm=0.5):
     """
     Computes grounded style alignment loss between predicted tag style (s_tag)
     and ground-truth reference audio style (s_audio).
     
     Guaranteed Pitfall Protection:
     - Never compares adjacent samples in a batch (avoids mode collapse).
-    - Aligns both distance (MSE) and directional angle (Cosine Similarity).
+    - Aligns coordinate distance (MSE), directional angle (Cosine Similarity),
+      and explicit vector magnitude (L1 Norm loss).
+    - Prevents under-scaling by penalizing L2 norm discrepancy against teacher.
     - Uses safe normalization with eps=1e-4 and clamp to prevent gradient explosion/NaNs.
     """
     s_tag_safe = torch.nan_to_num(s_tag, nan=0.0).clamp(-10.0, 10.0)
     s_audio_safe = torch.nan_to_num(s_audio, nan=0.0).clamp(-10.0, 10.0)
 
+    # 1. Coordinate MSE Loss
     loss_mse = F.mse_loss(s_tag_safe, s_audio_safe)
+
+    # 2. Directional Cosine Alignment Loss
     s_tag_norm = F.normalize(s_tag_safe, p=2, dim=-1, eps=1e-4)
     s_audio_norm = F.normalize(s_audio_safe, p=2, dim=-1, eps=1e-4)
     cos_sim = (s_tag_norm * s_audio_norm).sum(dim=-1).clamp(-1.0, 1.0)
     loss_cos = (1.0 - cos_sim).mean()
-    loss = loss_mse + lambda_cos * loss_cos
+
+    # 3. Explicit Norm Alignment Loss (Future runs training fix: prevents student norm shrinkage)
+    norm_tag_ac = torch.norm(s_tag_safe[:, :128], p=2, dim=-1)
+    norm_audio_ac = torch.norm(s_audio_safe[:, :128], p=2, dim=-1)
+    norm_tag_pr = torch.norm(s_tag_safe[:, 128:], p=2, dim=-1)
+    norm_audio_pr = torch.norm(s_audio_safe[:, 128:], p=2, dim=-1)
+    loss_norm = 0.5 * (F.l1_loss(norm_tag_ac, norm_audio_ac) + F.l1_loss(norm_tag_pr, norm_audio_pr))
+
+    loss = loss_mse + lambda_cos * loss_cos + lambda_norm * loss_norm
     if torch.isnan(loss) or torch.isinf(loss):
         return torch.tensor(0.0, device=s_tag.device, requires_grad=True)
     return loss
