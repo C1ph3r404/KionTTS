@@ -205,10 +205,10 @@ class KionStyleAlignmentLoss(nn.Module):
     and ground-truth reference audio style (s_audio).
     
     Protections:
-    - Direct MSE coordinate loss: strictly enforces magnitude & manifold matching teacher (~0.54 norm).
+    - Direct MSE coordinate loss: enforces manifold matching teacher.
     - Angular cosine distance: aligns the directional orientation in 256-d space.
     - Direct L1 loss: enforces fine-grained coordinate precision.
-    - Soft upper-bound norm penalty: prevents any vector magnitude explosion above teacher scale.
+    - Explicit acoustic & prosodic norm alignment: matches teacher norms (~2.68 / ~3.75).
     """
     def __init__(self, lambda_cos: float = 1.0, lambda_mse: float = 10.0, lambda_l1: float = 1.0, lambda_reg: float = 1.0):
         super().__init__()
@@ -233,11 +233,19 @@ class KionStyleAlignmentLoss(nn.Module):
         # 3. Direct unnormalized L1 coordinate loss
         loss_l1 = F.l1_loss(s_tag_safe, s_audio_safe)
 
-        # 4. Norm boundary regularization: penalize vectors if norm exceeds 1.5 (teacher norm is ~0.54)
-        tag_norms = torch.norm(s_tag_safe, p=2, dim=-1)
-        norm_penalty = torch.mean(torch.relu(tag_norms - 1.5) ** 2)
+        # 4. Explicit Norm Alignment Loss: pulls student acoustic (~2.68) and prosodic (~3.75)
+        # norms directly toward true teacher scale instead of artificial 1.5 ceiling
+        norm_tag_ac = torch.norm(s_tag_safe[:, :128], p=2, dim=-1)
+        norm_audio_ac = torch.norm(s_audio_safe[:, :128], p=2, dim=-1)
+        norm_tag_pr = torch.norm(s_tag_safe[:, 128:], p=2, dim=-1)
+        norm_audio_pr = torch.norm(s_audio_safe[:, 128:], p=2, dim=-1)
+        loss_norm = 0.5 * (F.l1_loss(norm_tag_ac, norm_audio_ac) + F.l1_loss(norm_tag_pr, norm_audio_pr))
 
-        total = self.lambda_cos * loss_cos + self.lambda_mse * loss_mse + self.lambda_l1 * loss_l1 + self.lambda_reg * norm_penalty
+        # Soft safety ceiling only against runaway vector explosion (> 8.0)
+        tag_norms = torch.norm(s_tag_safe, p=2, dim=-1)
+        explosion_penalty = torch.mean(torch.relu(tag_norms - 8.0) ** 2)
+
+        total = self.lambda_cos * loss_cos + self.lambda_mse * loss_mse + self.lambda_l1 * loss_l1 + self.lambda_reg * loss_norm + explosion_penalty
         if torch.isnan(total) or torch.isinf(total):
             return torch.tensor(0.0, device=s_tag.device, requires_grad=True)
         return total
