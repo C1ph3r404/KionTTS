@@ -92,38 +92,16 @@ class KionTagStyleEncoder(nn.Module):
         return s_tag
 
 
-def compute_kion_style_loss(s_tag, s_audio, lambda_cos=0.5, lambda_norm=0.5):
+def compute_kion_style_loss(s_tag, s_audio, lambda_cos=1.0, lambda_mse=10.0, lambda_l1=1.0, lambda_reg=1.0):
     """
-    Computes grounded style alignment loss between predicted tag style (s_tag)
-    and ground-truth reference audio style (s_audio).
-    
-    Guaranteed Pitfall Protection:
-    - Never compares adjacent samples in a batch (avoids mode collapse).
-    - Aligns coordinate distance (MSE), directional angle (Cosine Similarity),
-      and explicit vector magnitude (L1 Norm loss).
-    - Prevents under-scaling by penalizing L2 norm discrepancy against teacher.
-    - Uses safe normalization with eps=1e-4 and clamp to prevent gradient explosion/NaNs.
+    Unified style alignment loss helper.
+    Delegates directly to KionStyleAlignmentLoss (the single source of truth in losses.py).
     """
-    s_tag_safe = torch.nan_to_num(s_tag, nan=0.0).clamp(-10.0, 10.0)
-    s_audio_safe = torch.nan_to_num(s_audio, nan=0.0).clamp(-10.0, 10.0)
-
-    # 1. Coordinate MSE Loss
-    loss_mse = F.mse_loss(s_tag_safe, s_audio_safe)
-
-    # 2. Directional Cosine Alignment Loss
-    s_tag_norm = F.normalize(s_tag_safe, p=2, dim=-1, eps=1e-4)
-    s_audio_norm = F.normalize(s_audio_safe, p=2, dim=-1, eps=1e-4)
-    cos_sim = (s_tag_norm * s_audio_norm).sum(dim=-1).clamp(-1.0, 1.0)
-    loss_cos = (1.0 - cos_sim).mean()
-
-    # 3. Explicit Norm Alignment Loss (Future runs training fix: prevents student norm shrinkage)
-    norm_tag_ac = torch.norm(s_tag_safe[:, :128], p=2, dim=-1)
-    norm_audio_ac = torch.norm(s_audio_safe[:, :128], p=2, dim=-1)
-    norm_tag_pr = torch.norm(s_tag_safe[:, 128:], p=2, dim=-1)
-    norm_audio_pr = torch.norm(s_audio_safe[:, 128:], p=2, dim=-1)
-    loss_norm = 0.5 * (F.l1_loss(norm_tag_ac, norm_audio_ac) + F.l1_loss(norm_tag_pr, norm_audio_pr))
-
-    loss = loss_mse + lambda_cos * loss_cos + lambda_norm * loss_norm
-    if torch.isnan(loss) or torch.isinf(loss):
-        return torch.tensor(0.0, device=s_tag.device, requires_grad=True)
-    return loss
+    from .losses import KionStyleAlignmentLoss
+    loss_fn = KionStyleAlignmentLoss(
+        lambda_cos=lambda_cos,
+        lambda_mse=lambda_mse,
+        lambda_l1=lambda_l1,
+        lambda_reg=lambda_reg,
+    ).to(s_tag.device)
+    return loss_fn(s_tag, s_audio)
