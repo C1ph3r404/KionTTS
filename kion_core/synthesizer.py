@@ -136,9 +136,12 @@ class KionSynthesizer:
             if char in dicts:
                 indexes.append(dicts[char])
 
-        # StyleTTS2 boundary padding
+        # StyleTTS2 boundary padding:
+        # Prepend initial boundary token 0 (matching reference inference).
+        # We do NOT append a trailing token 0 at inference, as doing so causes
+        # the prosody predictor and HiFi-GAN decoder to synthesize an artificial
+        # voiced grunt ("hmph") after the natural sentence-ending punctuation silence.
         indexes.insert(0, 0)
-        indexes.append(0)
         return torch.LongTensor(indexes).unsqueeze(0).to(self.device)
 
     def extract_style_from_audio(self, wav_path: str) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -216,7 +219,6 @@ class KionSynthesizer:
         pred_dur = torch.round(duration.squeeze() / speed).clamp(min=1)
         if pred_dur.dim() == 0:
             pred_dur = pred_dur.unsqueeze(0)
-        pred_dur[-1] += 5  # Small trailing pause
 
         total_frames = int(pred_dur.sum().item())
         pred_aln_trg = torch.zeros((input_lengths.item(), total_frames), device=self.device)
@@ -241,4 +243,16 @@ class KionSynthesizer:
         wave = out.squeeze().cpu().numpy()
         wave = np.nan_to_num(wave, nan=0.0, posinf=1.0, neginf=-1.0)
         wave = np.clip(wave, -1.0, 1.0)
+
+        # 5. Boundary Artifact & Trailing Glitch Suppression
+        # StyleTTS2 HiFi-GAN decoder has a known edge reflection artifact on the final conv frame
+        # (documented in official reference notebooks: [..., :-50] or [..., :-100]).
+        # Trim boundary edge samples and apply a 10ms smooth micro-fadeout to ensure pristine silence.
+        trim_edge = 100
+        if len(wave) > trim_edge + 240:
+            wave = wave[:-trim_edge]
+            fade_len = int(24000 * 0.01)  # 10ms (240 samples at 24kHz)
+            fade_curve = np.linspace(1.0, 0.0, fade_len)
+            wave[-fade_len:] *= fade_curve
+
         return wave
